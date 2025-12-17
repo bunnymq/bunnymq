@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func Benchmark(b *testing.B) {
+func BenchmarkDiskWrite(b *testing.B) {
 	benchCases := []struct {
 		name     string
 		fileName string
