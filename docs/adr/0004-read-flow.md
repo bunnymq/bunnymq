@@ -49,7 +49,7 @@ Sequence of how it is implemented in Kafka
       UL->>SEG: read(startOffset=10, maxSize=10MB)
                                                                                                                                                        
       SEG->>IDX: lookup(offset=10)
-      Note over IDX: бинарный поиск в mmap<br/>(без syscall - память)                                                                                  
+      Note over IDX: бинарный поиск в mmap<br/>(без syscall — память)                                                                                  
       IDX-->>SEG: OffsetPosition(offset=8, filePos=1024)                                                                                               
                                                                                                                                                        
       SEG->>FR: searchForOffsetFromPosition(10, pos=1024)                                                                                              
@@ -60,19 +60,19 @@ Sequence of how it is implemented in Kafka
       FR-->>SEG: LogOffsetPosition(offset=10, filePos=1432, size=512)                                                                                  
                                                                                                                                                        
       SEG->>FR: slice(start=1432, len=min(segEnd-1432, 10MB))                                                                                          
-      Note over FR: FileRecords - это view<br/>на FileChannel, без копии                                                                               
+      Note over FR: FileRecords — это view<br/>на FileChannel, без копии                                                                               
       FR-->>SEG: FetchDataInfo(FileRecords slice)                                                                                                      
       SEG-->>UL: FetchDataInfo
       UL-->>RM: LogReadResult                                                                                                                          
       RM-->>API: Map[partition → FetchDataInfo]                                                                                                        
                                                                                                                                                        
       API->>NET: sendResponse(MultiRecordsSend)                                                                                                        
-      Note over API,NET: заголовок ответа - обычный ByteBuffer
+      Note over API,NET: заголовок ответа — обычный ByteBuffer
       NET->>TL: writeTo(channel)                                                                                                                       
       TL->>FR: writeTo(channel, offset=1432, len)
       FR->>TL: transferFrom(fileChannel, 1432, len)                                                                                                    
       TL->>TL: fileChannel.transferTo(1432, len, socketChannel)                                                                                        
-      Note over TL: sendfile() - ядро читает<br/>page cache → socket,<br/>0 копий в user space                                                         
+      Note over TL: sendfile() — ядро читает<br/>page cache → socket,<br/>0 копий в user space                                                         
                                                                                                                                                        
       NET-->>FC: FetchResponse(bytes)                                                                                                                  
       FC->>FC: CompletedFetch(batches.iterator())                                                                                                      

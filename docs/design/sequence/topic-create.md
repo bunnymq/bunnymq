@@ -16,7 +16,7 @@ sequenceDiagram
     MAPI->>+CC: CreateTopic(ctx, name, partitions, rf, overrides)
 
     CC->>RH: LookupMetadata(QueryListNodes)
-    Note over RH: ReadLocalNode - no Raft round-trip
+    Note over RH: ReadLocalNode — no Raft round-trip
     RH-->>CC: [node1, node2, node3] (sorted by node_id)
 
     Note over CC: Validate: name regex, partitions≥1,<br/>1≤rf≤len(nodes)<br/>Compute replicaNodeIDs[p] for p∈[0,P)<br/>  start = fnv32a(name) % M<br/>  replica r of partition p → nodes[(start+p+r)%M]<br/>Resolve retentionMs, retentionBytes from overrides/defaults
@@ -41,7 +41,7 @@ sequenceDiagram
     Note over CCN: reconcileLoop fires on each node<br/>(within reconcile_interval_ms, default 3 s).<br/>If eager_reconcile_on_create=true,<br/>proposing node runs this synchronously<br/>before the response above.
 
     CCN->>+RH: LookupMetadata(QueryListAllPartitions)
-    Note over RH: ReadLocalNode - no Raft round-trip
+    Note over RH: ReadLocalNode — no Raft round-trip
     RH-->>-CCN: all PartitionMeta[]
 
     Note over CCN: Detect new shards assigned to this node<br/>that are not in runningShards map

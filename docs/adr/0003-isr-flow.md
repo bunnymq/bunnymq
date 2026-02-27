@@ -90,7 +90,7 @@ sequenceDiagram
           LRM-->>LAPI: Map[partition → FetchDataInfo]
           LAPI->>TL: sendResponse(MultiRecordsSend)                                                                                                    
           TL->>TL: fileChannel.transferTo(pos, len, socket)                                                                                            
-          Note over TL: sendfile() - данные идут<br/>page cache → socket, 0 копий                                                                      
+          Note over TL: sendfile() — данные идут<br/>page cache → socket, 0 копий                                                                      
                                                                                                                                                        
           TL-->>FT: FetchResponse (bytes по TCP)                                                                                                       
                                                                                                                                                        
@@ -125,7 +125,7 @@ sequenceDiagram
       PG->>PG: tryComplete() → false (данных нет)                                                                                                      
       PG->>PG: watchForOperation(key, delayedFetch)<br/>добавить в watchersByKey[TopicPartitionKey]                                                    
       PG->>TM: timeoutTimer.add(delayedFetch, delayMs=500ms)                                                                                           
-      Note over TM: HashedWheelTimer - запись в bucket<br/>по TTL. Никакого sleep/poll.                                                                
+      Note over TM: HashedWheelTimer — запись в bucket<br/>по TTL. Никакого sleep/poll.                                                                
       NET-->>C: (запрос завис, ответа нет)                                                                                                             
       Note over C,TM: ... тишина, пока нет новых данных ...                                                                                            
                                                                                                                                                        
@@ -133,7 +133,7 @@ sequenceDiagram
       NET->>RM: appendRecords()                                                                                                                        
       RM->>RM: UnifiedLog.append() → LEO растёт
       RM->>AQ: actionQueue.add { checkAndComplete(key) }                                                                                               
-      Note over AQ: ActionQueue - очередь отложенных<br/>действий, выполняется после append                                                            
+      Note over AQ: ActionQueue — очередь отложенных<br/>действий, выполняется после append                                                            
                                                                                                                                                        
       AQ->>PG: checkAndComplete(TopicPartitionKey)                                                                                                     
       PG->>PG: watchers.tryCompleteWatched()                                                                                                           

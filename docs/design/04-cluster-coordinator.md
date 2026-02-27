@@ -1,6 +1,6 @@
-# Cluster Coordinator - Detailed Design
+# Cluster Coordinator — Detailed Design
 
-The Cluster Coordinator is the **sole writer** to the Metadata FSM for topic, partition, and node lifecycle operations. It handles all admin-plane operations - topic create, delete, and alter; cluster description - and manages the lifecycle of partition Raft shards on the local node: starting them when new partitions are assigned to this node and stopping them when partitions are deleted. The Data Coordinator and Group Coordinator read metadata via `LookupMetadata`; the Cluster Coordinator is the only module that writes it. It does not handle produce or fetch traffic.
+The Cluster Coordinator is the **sole writer** to the Metadata FSM for topic, partition, and node lifecycle operations. It handles all admin-plane operations — topic create, delete, and alter; cluster description — and manages the lifecycle of partition Raft shards on the local node: starting them when new partitions are assigned to this node and stopping them when partitions are deleted. The Data Coordinator and Group Coordinator read metadata via `LookupMetadata`; the Cluster Coordinator is the only module that writes it. It does not handle produce or fetch traffic.
 
 See [00-overview.md §1](./00-overview.md), [01-modules.md §4](./01-modules.md), and [03-raft-fsm.md §2–3](./03-raft-fsm.md) for context on the Raft host, Metadata FSM state, and shard ID conventions.
 
@@ -14,7 +14,7 @@ See [00-overview.md §1](./00-overview.md), [01-modules.md §4](./01-modules.md)
 - **Partition assignment.** Computes the replica-to-node mapping for every new partition using the deterministic round-robin algorithm (§4). The assignment is included in the metadata command payload.
 - **Partition shard lifecycle on this node.** A background reconciliation goroutine periodically compares the set of partition shards this node should be running (from metadata) against those it is actually running, and calls `StartPartitionShard` / `StopPartitionShard` accordingly (§7).
 - **Leader epoch tracking.** Detects leader changes for partition shards on this node and commits `AssignPartitionLeader` commands to the metadata shard so clients can discover the current leader (§6).
-- **Cluster description.** DescribeCluster, ListPartitions - read-only lookups against the local Metadata FSM with no Raft round-trip.
+- **Cluster description.** DescribeCluster, ListPartitions — read-only lookups against the local Metadata FSM with no Raft round-trip.
 - **Bootstrap.** Starts the metadata shard replica, waits for leader election, registers this node, runs an initial reconciliation, and signals readiness (§8).
 
 ### What the Cluster Coordinator does NOT do
@@ -56,12 +56,12 @@ func (cc *ClusterCoordinator) CreateTopic(
 func (cc *ClusterCoordinator) DeleteTopic(ctx context.Context, name string) error
 
 // ListTopics returns a summary of all topics in the cluster. Served from the
-// local Metadata FSM via ReadLocalNode - no Raft consensus round-trip.
+// local Metadata FSM via ReadLocalNode — no Raft consensus round-trip.
 func (cc *ClusterCoordinator) ListTopics(ctx context.Context) ([]TopicInfo, error)
 
 // DescribeTopic returns full metadata for a named topic, including per-partition
 // leader node ID, leader epoch, replica node IDs, and shard ID. Served from the
-// local Metadata FSM - no Raft consensus round-trip.
+// local Metadata FSM — no Raft consensus round-trip.
 // Returns TopicNotFound if the topic does not exist.
 func (cc *ClusterCoordinator) DescribeTopic(ctx context.Context, name string) (TopicDescription, error)
 
@@ -92,7 +92,7 @@ func (cc *ClusterCoordinator) AlterTopicRetention(
 ) error
 
 // DescribeCluster returns the current cluster topology: all registered nodes
-// with their node IDs and Raft addresses. Served from the local Metadata FSM -
+// with their node IDs and Raft addresses. Served from the local Metadata FSM —
 // no Raft consensus round-trip.
 func (cc *ClusterCoordinator) DescribeCluster(ctx context.Context) (ClusterDescription, error)
 ```
@@ -159,7 +159,7 @@ type NodeDescriptor struct {
 
 1. **Validate.** `LookupMetadata(QueryGetTopic{name})`. If not found, return `TopicNotFound`.
 2. **Propose.** `SyncProposeMetadata(DeleteTopicCmd{name})`. Blocks until quorum commit. On commit, the FSM removes `TopicMeta` and all `PartitionMeta` entries for this topic; subsequent `LookupMetadata` for these partitions returns `nil`.
-3. **Return.** Return `nil` immediately. Physical teardown is asynchronous - the reconciliation goroutine detects shards in `runningShards` with no corresponding `PartitionMeta` and stops them (§7.3).
+3. **Return.** Return `nil` immediately. Physical teardown is asynchronous — the reconciliation goroutine detects shards in `runningShards` with no corresponding `PartitionMeta` and stops them (§7.3).
 
 ### 3.3 ListTopics
 
@@ -168,9 +168,9 @@ type NodeDescriptor struct {
 
 ### 3.4 DescribeTopic
 
-1. `LookupMetadata(QueryGetTopic{name})` - returns `*TopicMeta` or `nil`.
+1. `LookupMetadata(QueryGetTopic{name})` — returns `*TopicMeta` or `nil`.
 2. If nil, return `TopicNotFound`.
-3. `LookupMetadata(QueryGetPartitions{name})` - returns `[]*PartitionMeta` for all partitions.
+3. `LookupMetadata(QueryGetPartitions{name})` — returns `[]*PartitionMeta` for all partitions.
 4. Assemble and return `TopicDescription`. No Raft round-trip.
 
 ### 3.5 AlterTopicPartitionCount
@@ -197,7 +197,7 @@ type NodeDescriptor struct {
 ## 4. Partition Assignment Algorithm
 
 Given:
-- `nodes []NodeInfo` - all cluster nodes sorted by `node_id` ascending (M nodes total).
+- `nodes []NodeInfo` — all cluster nodes sorted by `node_id` ascending (M nodes total).
 - `topicName string`
 - `partitionID int32` (0-indexed)
 - `replicationFactor int32` (RF)
@@ -249,7 +249,7 @@ The counter never resets and shard IDs from deleted topics are never reused. The
 
 When a partition shard's Raft leader changes, the Cluster Coordinator must commit an `AssignPartitionLeader` command so that clients and the Data Coordinator can discover the new leader.
 
-### Chosen mechanism - periodic sweep (v1)
+### Chosen mechanism — periodic sweep (v1)
 
 A background goroutine sweeps all locally running partition shards every `leader_check_interval_ms` (default: 3 000 ms):
 
@@ -305,15 +305,15 @@ func (cc *ClusterCoordinator) sweepLeaders(ctx context.Context) {
 }
 ```
 
-The Metadata FSM validates that the incoming `LeaderEpoch` exceeds the stored epoch before applying the update - duplicate or stale proposals from multiple nodes are safely ignored ([03-raft-fsm.md §3.2](./03-raft-fsm.md)).
+The Metadata FSM validates that the incoming `LeaderEpoch` exceeds the stored epoch before applying the update — duplicate or stale proposals from multiple nodes are safely ignored ([03-raft-fsm.md §3.2](./03-raft-fsm.md)).
 
-### Alternative - dragonboat event listener (future)
+### Alternative — dragonboat event listener (future)
 
 VERIFY: dragonboat v4 may expose a leader-change callback via `NodeHostConfig.RaftEventListener` (candidate type: `raft.IEventListener`, method: `LeaderUpdated(LeaderInfo)`). If confirmed available, the callback approach should replace the periodic sweep: it eliminates the staleness window (up to `leader_check_interval_ms`) and reduces unnecessary Raft proposals. The callback would enqueue a leader-change event on a buffered channel; a dedicated goroutine drains the channel and calls `SyncProposeMetadata`. The sweep can remain as a safety net with a longer interval (e.g. 30 s) to catch any missed events.
 
 ---
 
-## 7. Partition Shard Lifecycle - Reconciliation Goroutine
+## 7. Partition Shard Lifecycle — Reconciliation Goroutine
 
 One background goroutine per node reconciles the set of running partition shards against the set declared in the Metadata FSM.
 
@@ -450,30 +450,30 @@ func (cc *ClusterCoordinator) stopShard(shardID uint64, info shardInfo) {
 On process start, performed synchronously before `cmd/bunnymq` declares the broker ready and starts gRPC servers:
 
 ```
-Step 1 - Start metadata shard replica.
+Step 1 — Start metadata shard replica.
   raftHost.StartCluster(initialMembers, join=false, metadataFSMFactory, rcMetadata)
   initialMembers is populated from config.Peers (nodeID → raftAddress map).
   join=false for a fresh cluster; join=true when a node rejoins (VERIFY: exact semantics).
 
-Step 2 - Wait for metadata shard leader.
+Step 2 — Wait for metadata shard leader.
   Poll LookupMetadata(QueryListNodes) every 200 ms.
   Success when a response returns without error (any leader is elected).
   Timeout: config.BootstrapTimeoutMs (default: 30 000 ms). Return fatal error on timeout.
 
-Step 3 - Register this node.
+Step 3 — Register this node.
   SyncProposeMetadata(RegisterNodeCmd{NodeID: config.NodeID, Address: config.RaftAddress})
   The FSM applies this idempotently (REQUIREMENTS.md §3.2.3; node list is static).
 
-Step 4 - Run initial partition reconciliation.
+Step 4 — Run initial partition reconciliation.
   Call reconcileOnce(ctx) synchronously.
   Starts all partition shards assigned to this node before readiness is signalled.
   This ensures the broker can serve produce and fetch requests immediately on startup.
 
-Step 5 - Start background goroutines.
+Step 5 — Start background goroutines.
   reconcileLoop goroutine
   leaderSweepLoop goroutine
 
-Step 6 - Signal readiness.
+Step 6 — Signal readiness.
   Close a done channel that cmd/bunnymq selects on before starting gRPC servers.
 ```
 
@@ -537,14 +537,14 @@ Clients discover the leader for a partition via `DescribeTopic` (which reads `Pa
 
 ## 13. Open Questions
 
-1. **VERIFY - dragonboat leader notification API.** Does dragonboat v4 expose an `IEventListener` interface (or equivalent, e.g. `config.NodeHostConfig.RaftEventListener`) that fires synchronous callbacks on leader change? Exact interface name and method signature needed. If confirmed, replace the periodic sweep for the leader-epoch update path and retain the sweep only as a reconciliation safety net at a longer interval (e.g. 30 s).
+1. **VERIFY — dragonboat leader notification API.** Does dragonboat v4 expose an `IEventListener` interface (or equivalent, e.g. `config.NodeHostConfig.RaftEventListener`) that fires synchronous callbacks on leader change? Exact interface name and method signature needed. If confirmed, replace the periodic sweep for the leader-epoch update path and retain the sweep only as a reconciliation safety net at a longer interval (e.g. 30 s).
 
-2. **VERIFY - `NodeHost.GetLeaderID` signature.** The periodic leader sweep calls `GetLeaderID(shardID)`. Verify the method exists in dragonboat v4, its exact signature, and whether the returned `term` corresponds to `LeaderEpoch` for use in `AssignPartitionLeaderCmd`.
+2. **VERIFY — `NodeHost.GetLeaderID` signature.** The periodic leader sweep calls `GetLeaderID(shardID)`. Verify the method exists in dragonboat v4, its exact signature, and whether the returned `term` corresponds to `LeaderEpoch` for use in `AssignPartitionLeaderCmd`.
 
-3. **VERIFY - `StartCluster` join semantics.** When a partition shard already exists in the cluster and this node needs to join it, confirm the correct dragonboat v4 `StartCluster` call: `join=true` with a full `initialMembers` map, or `join=true` with `initialMembers=nil`. Also confirm the proposed heuristic (lowest NodeID in ReplicaNodeIDs starts with `join=false`; others use `join=true`) is correct for new shard creation, or if all nodes should simultaneously call `StartCluster` with `join=false` and full `initialMembers`.
+3. **VERIFY — `StartCluster` join semantics.** When a partition shard already exists in the cluster and this node needs to join it, confirm the correct dragonboat v4 `StartCluster` call: `join=true` with a full `initialMembers` map, or `join=true` with `initialMembers=nil`. Also confirm the proposed heuristic (lowest NodeID in ReplicaNodeIDs starts with `join=false`; others use `join=true`) is correct for new shard creation, or if all nodes should simultaneously call `StartCluster` with `join=false` and full `initialMembers`.
 
 4. **`QueryListAllPartitions` in the FSM.** The `reconcileOnce` procedure requires listing all partitions across all topics. A `QueryListAllPartitions` query type is proposed here; confirm whether it should be added to the Metadata FSM's query set in [03-raft-fsm.md](./03-raft-fsm.md) (immutable) or implemented here as two sequential lookups (QueryListTopics → per-topic QueryGetPartitions).
 
-5. **`AlterTopicRetention` - sentinel values.** The interface uses `retentionMs = -1` for "no change" and `retentionBytes = -1` for "unlimited" (REQUIREMENTS.md §4.1), with `retentionBytes = 0` meaning "no change". This overloads `-1` with two different meanings across the two fields. An alternative is to use proto `optional` fields (oneof or google.protobuf.Int64Value) decided at API design time (Module 3). Flag for resolution there.
+5. **`AlterTopicRetention` — sentinel values.** The interface uses `retentionMs = -1` for "no change" and `retentionBytes = -1` for "unlimited" (REQUIREMENTS.md §4.1), with `retentionBytes = 0` meaning "no change". This overloads `-1` with two different meanings across the two fields. An alternative is to use proto `optional` fields (oneof or google.protobuf.Int64Value) decided at API design time (Module 3). Flag for resolution there.
 
 6. **Eager reconcile on CreateTopic.** With a 3-second reconcile interval, partition shards can take up to 3 seconds to start after CreateTopic returns, causing an `Unavailable` window for produces. If `eager_reconcile_on_create` is enabled, `CreateTopic` calls `reconcileOnce` synchronously before returning, eliminating this window. Confirm this is the desired behaviour given the added CreateTopic latency (partition shard startup, including dragonboat leader election, can take several RTTs).

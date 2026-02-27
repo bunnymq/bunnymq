@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-BunnyMQ is a Kafka-like distributed message broker written in Go. It is currently in the **implementation phase** - the design phase (sessions 1–4) is complete and produced detailed design documents in `docs/design/`. Ticket breakdown lives in `CLAUDE_pending_tickets.md`.
+BunnyMQ is a Kafka-like distributed message broker written in Go. It is currently in the **implementation phase** — the design phase (sessions 1–4) is complete and produced detailed design documents in `docs/design/`. Ticket breakdown lives in `CLAUDE_pending_tickets.md`.
 
 ## Commands
 
@@ -36,22 +36,22 @@ buf generate
 BunnyMQ uses a **multi-Raft model** via [dragonboat v4](https://github.com/lni/dragonboat): one Raft shard per partition plus one shard for cluster metadata.
 
 **Control plane** handles cluster topology and consumer group state:
-- `internal/coordinator/cluster` - sole writer to the Metadata FSM; owns topic lifecycle, partition assignment across nodes
-- `internal/coordinator/group` - consumer group lifecycle: join/leave/heartbeat/rebalance, offset commit/fetch
-- `internal/metadata` - `IStateMachine` (in-memory, JSON snapshots); keyed by topic/partition/node
-- `internal/api/management` - gRPC server exposing topic admin and group RPCs
+- `internal/coordinator/cluster` — sole writer to the Metadata FSM; owns topic lifecycle, partition assignment across nodes
+- `internal/coordinator/group` — consumer group lifecycle: join/leave/heartbeat/rebalance, offset commit/fetch
+- `internal/metadata` — `IStateMachine` (in-memory, JSON snapshots); keyed by topic/partition/node
+- `internal/api/management` — gRPC server exposing topic admin and group RPCs
 
 **Data plane** handles produce/fetch traffic:
-- `internal/coordinator/data` - routes produce/fetch to the correct partition shard leader; dispatches `Propose`/`SyncPropose`
-- `internal/partition` - `IOnDiskStateMachine` wrapping Storage; `Update()` is strictly deterministic (no `time.Now()`, no network I/O)
-- `internal/storage` - segmented append-only log; see `docs/design/02-storage.md` for full spec
-- `internal/api/data` - gRPC server exposing Produce, Fetch, and offset query RPCs
+- `internal/coordinator/data` — routes produce/fetch to the correct partition shard leader; dispatches `Propose`/`SyncPropose`
+- `internal/partition` — `IOnDiskStateMachine` wrapping Storage; `Update()` is strictly deterministic (no `time.Now()`, no network I/O)
+- `internal/storage` — segmented append-only log; see `docs/design/02-storage.md` for full spec
+- `internal/api/data` — gRPC server exposing Produce, Fetch, and offset query RPCs
 
 **Cross-cutting:**
-- `internal/raft` - thin wrapper around dragonboat `NodeHost`; registers FSMs, provides typed Propose helpers
-- `internal/auth` - token-based gRPC interceptor (PLAINTEXT mode if token list is empty)
-- `pkg/client` - public `Producer`, `Consumer`, `AdminClient` with leader discovery and retry
-- `pkg/proto` - generated protobuf + gRPC stubs (do not hand-edit); source `.proto` files live in `api/`
+- `internal/raft` — thin wrapper around dragonboat `NodeHost`; registers FSMs, provides typed Propose helpers
+- `internal/auth` — token-based gRPC interceptor (PLAINTEXT mode if token list is empty)
+- `pkg/client` — public `Producer`, `Consumer`, `AdminClient` with leader discovery and retry
+- `pkg/proto` — generated protobuf + gRPC stubs (do not hand-edit); source `.proto` files live in `api/`
 
 ## Key architectural constraints (fixed)
 
@@ -59,9 +59,9 @@ BunnyMQ uses a **multi-Raft model** via [dragonboat v4](https://github.com/lni/d
 - **Wire format:** gRPC + Protobuf. Batch format on disk equals batch format on wire (Kafka-compatible layout).
 - **Reads:** only the Raft shard leader serves fetches and produce. Clients that hit a non-leader receive `NotLeader` with the leader's address and retry directly.
 - **Partition FSM determinism:** `Update()` must be free of side effects beyond calling into Storage. Retention is a Raft command (`DeleteSegmentsBefore`), not a local-only operation, so that all replicas delete the same segments.
-- **Cluster membership is static** - no runtime node add/remove in v1.
-- **Consumer group assignment** - range-based only; no cooperative rebalance, no sticky assignment.
-- **Long-poll fetch** - implemented via a channel notification from Storage (`newDataCh`) on each `Append`; the Partition FSM broadcasts after a successful `Update`.
+- **Cluster membership is static** — no runtime node add/remove in v1.
+- **Consumer group assignment** — range-based only; no cooperative rebalance, no sticky assignment.
+- **Long-poll fetch** — implemented via a channel notification from Storage (`newDataCh`) on each `Append`; the Partition FSM broadcasts after a successful `Update`.
 
 ## Design documents
 
@@ -82,7 +82,7 @@ All detailed specs live in `docs/design/`. Read these before implementing a modu
 
 Sequence diagrams for all major flows are in `docs/design/sequence/`.
 
-## Storage internals (most complex module - start here for M1)
+## Storage internals (most complex module — start here for M1)
 
 ```
 Storage

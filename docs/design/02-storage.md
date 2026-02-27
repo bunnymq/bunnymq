@@ -1,6 +1,6 @@
-# Storage - Detailed Design
+# Storage — Detailed Design
 
-Storage is the physical persistence layer for a single partition replica. It manages a segmented, append-only log on disk (`.log` files) alongside two sparse, mmap'd index files per segment - a `.index` file for offset-to-file-position lookup and a `.timeindex` file for timestamp-to-offset lookup. Storage is used exclusively by the Partition FSM (`internal/partition`); nothing else in BunnyMQ calls Storage directly. The interface is intentionally shaped around that one caller: a single sequential writer driven by committed Raft entries, plus concurrent readers bounded by the FSM's `lastAppliedIndex`.
+Storage is the physical persistence layer for a single partition replica. It manages a segmented, append-only log on disk (`.log` files) alongside two sparse, mmap'd index files per segment — a `.index` file for offset-to-file-position lookup and a `.timeindex` file for timestamp-to-offset lookup. Storage is used exclusively by the Partition FSM (`internal/partition`); nothing else in BunnyMQ calls Storage directly. The interface is intentionally shaped around that one caller: a single sequential writer driven by committed Raft entries, plus concurrent readers bounded by the FSM's `lastAppliedIndex`.
 
 See [overview](./00-overview.md) for the architectural rationale behind the segmented-log design (§5.5), and [modules](./01-modules.md) for the module boundary and the long-polling mechanism (§5).
 
@@ -141,7 +141,7 @@ type Storage interface {
 }
 ```
 
-> **base_offset assignment:** Storage is the authoritative source of the next offset and writes it into `batch[0:8]` before appending to disk. The CRC field covers only `records[]` (bytes [38, batch_length)), so overwriting `base_offset` does not invalidate the CRC. This is the decided approach - single call, single source of truth for offset assignment.
+> **base_offset assignment:** Storage is the authoritative source of the next offset and writes it into `batch[0:8]` before appending to disk. The CRC field covers only `records[]` (bytes [38, batch_length)), so overwriting `base_offset` does not invalidate the CRC. This is the decided approach — single call, single source of truth for offset assignment.
 
 ---
 
@@ -208,14 +208,14 @@ The log reader advances through a segment by consuming exactly `batch_length` by
 
 ### 3.3 Index Entry Layouts
 
-**Offset index** (`.index`) - 8 bytes per entry, big-endian:
+**Offset index** (`.index`) — 8 bytes per entry, big-endian:
 
 | Offset | Size | Type  | Field            | Notes |
 |--------|------|-------|------------------|-------|
 | 0      | 4    | int32 | relative_offset  | `batch.base_offset − segment.base_offset` |
 | 4      | 4    | int32 | position         | Byte offset of the batch start within the `.log` file |
 
-**Time index** (`.timeindex`) - 12 bytes per entry, big-endian:
+**Time index** (`.timeindex`) — 12 bytes per entry, big-endian:
 
 | Offset | Size | Type  | Field            | Notes |
 |--------|------|-------|------------------|-------|
@@ -253,12 +253,12 @@ The mmap region covers the entire pre-allocated file (`PROT_READ|PROT_WRITE`, `M
 
 When rolling a segment (see §5.3):
 
-1. `ftruncate(.index, entryCount × 8)` - shrink the pre-allocated file to actual size.
-2. `msync(.index, MS_SYNC)` - flush dirty index pages to disk.
-3. `munmap(.index)` - release the write mapping.
-4. `mmap(.index, PROT_READ, MAP_SHARED)` - re-map read-only.
+1. `ftruncate(.index, entryCount × 8)` — shrink the pre-allocated file to actual size.
+2. `msync(.index, MS_SYNC)` — flush dirty index pages to disk.
+3. `munmap(.index)` — release the write mapping.
+4. `mmap(.index, PROT_READ, MAP_SHARED)` — re-map read-only.
 5. Repeat steps 1–4 for `.timeindex` (entry size 12).
-6. `fsync(.log)` - flush log file pages.
+6. `fsync(.log)` — flush log file pages.
 
 After these six steps the sealed segment is entirely read-only and safe to serve from concurrent goroutines.
 
@@ -317,7 +317,7 @@ Retention enforcement (§7) removes a sealed segment by:
 1. Acquiring the segment list write lock.
 2. Removing the element from the slice.
 3. Releasing the lock.
-4. Calling `os.Remove` on the three files (outside the lock - file removal is slow).
+4. Calling `os.Remove` on the three files (outside the lock — file removal is slow).
 
 Deletion happens oldest-first. The active segment is never removed.
 
@@ -327,11 +327,11 @@ Deletion happens oldest-first. The active segment is never removed.
 
 `Storage.Open(dir)` is invoked by `internal/partition` during `IOnDiskStateMachine.Open()`. The caller receives the last-applied Raft index from a sidecar file managed by the Partition FSM (not by Storage); `Open` returns the highest `nextOffset` derived from the log itself.
 
-### Step 1 - Enumerate Segments
+### Step 1 — Enumerate Segments
 
 List all `.log` files in the partition directory. Sort by the numeric base offset encoded in the filename. If no `.log` files exist, create the first segment with `base_offset = 0` and return.
 
-### Step 2 - Open Sealed Segments
+### Step 2 — Open Sealed Segments
 
 For each segment except the last:
 - Open `.log`, `.index`, `.timeindex` read-only.
@@ -339,7 +339,7 @@ For each segment except the last:
 - Validate: index file size must be a multiple of its entry size (8 for `.index`, 12 for `.timeindex`). If not (implies a crash during `ftruncate`), truncate to the nearest valid multiple.
 - These segments are trusted as logically consistent: they were fsynced and msync'd before any subsequent data was committed.
 
-### Step 3 - Recover the Active Segment
+### Step 3 — Recover the Active Segment
 
 The last `.log` file is the active segment and may be partially written. Scan from byte 0:
 
@@ -377,11 +377,11 @@ logSize = position
 
 After the scan, `position` is the first byte of invalid data (or end of file on a clean shutdown). `nextOffset` is the offset that will be assigned to the next batch.
 
-### Step 4 - Rebuild Active Segment Index
+### Step 4 — Rebuild Active Segment Index
 
 Re-scan the validated region (bytes `[0, position)`) of the active `.log` file. Apply the same sampling logic as normal appends. Write offset-index and time-index entries into the mmap region (freshly allocated if the index file was missing or corrupt). This fully reconstructs the index, tolerating any crash-time inconsistency in the `.index` and `.timeindex` files.
 
-### Step 5 - Open Active Segment for Writing
+### Step 5 — Open Active Segment for Writing
 
 Re-open `.log` with `O_WRONLY|O_APPEND`. Set `logSize = position`. The mmap region from Step 4 remains active (read-write).
 
@@ -446,7 +446,7 @@ See [sequence/storage-retention.md](./sequence/storage-retention.md).
 
 ### Why a Single Writer is Acceptable
 
-dragonboat guarantees that `IOnDiskStateMachine.Update()` is never invoked concurrently on the same instance. Therefore `Append` is called by exactly one goroutine at a time and `segMu.Lock()` in `Append` has zero contention from other writers. The only write-lock contender is the retention goroutine, which holds the lock only to splice a pointer out of a slice - O(n) where n is the number of segments (≤ a few dozen) - not during the slower file removal.
+dragonboat guarantees that `IOnDiskStateMachine.Update()` is never invoked concurrently on the same instance. Therefore `Append` is called by exactly one goroutine at a time and `segMu.Lock()` in `Append` has zero contention from other writers. The only write-lock contender is the retention goroutine, which holds the lock only to splice a pointer out of a slice — O(n) where n is the number of segments (≤ a few dozen) — not during the slower file removal.
 
 ### Active Segment Read Safety
 
@@ -477,8 +477,8 @@ The active segment's index mmap is written by the single Append goroutine and re
 
 | Error | Cause | FSM/Coordinator action |
 |-------|-------|----------------------|
-| `ErrOffsetOutOfRange` | `offset < EarliestOffset()` - deleted by retention | Data Coordinator returns `OFFSET_OUT_OF_RANGE` to the client. Client must seek to `EarliestOffset`. |
-| `(nil, offset, nil)` | `offset >= LatestOffset()` - not yet written | Data Coordinator enters long-poll via `NewDataCh`; see [modules §5](./01-modules.md). |
+| `ErrOffsetOutOfRange` | `offset < EarliestOffset()` — deleted by retention | Data Coordinator returns `OFFSET_OUT_OF_RANGE` to the client. Client must seek to `EarliestOffset`. |
+| `(nil, offset, nil)` | `offset >= LatestOffset()` — not yet written | Data Coordinator enters long-poll via `NewDataCh`; see [modules §5](./01-modules.md). |
 | I/O error reading sealed segment | Corrupt or missing sealed file | Return error to FSM. FSM returns error from `Lookup`. dragonboat propagates the error to the Data Coordinator, which returns a retriable error to the client. |
 
 ---
@@ -499,6 +499,6 @@ The active segment's index mmap is written by the single Append goroutine and re
 
 ## 11. Open Questions
 
-1. **Retention - union semantics confirmed?** The current design deletes a sealed segment if it violates `retentionMs` OR `retentionBytes` (union, matching Kafka). Both constraints are required by [REQUIREMENTS.md §3.1.6](../REQUIREMENTS.md) and §4.1. `retentionBytes` is the primary enforced cap in typical deployments; `retentionMs` applies when data is old but the byte cap has not yet been reached. Confirm that union semantics are acceptable, or specify a different priority ordering.
+1. **Retention — union semantics confirmed?** The current design deletes a sealed segment if it violates `retentionMs` OR `retentionBytes` (union, matching Kafka). Both constraints are required by [REQUIREMENTS.md §3.1.6](../REQUIREMENTS.md) and §4.1. `retentionBytes` is the primary enforced cap in typical deployments; `retentionMs` applies when data is old but the byte cap has not yet been reached. Confirm that union semantics are acceptable, or specify a different priority ordering.
 
-> **Resolved decisions:** (1) Storage assigns `base_offset` in-place. (2) No `fsync` per `Append` - Raft log replay is the recovery mechanism. (3) No time-based segment roll in v1. (4) `fallocate` fallback logs `warn`.
+> **Resolved decisions:** (1) Storage assigns `base_offset` in-place. (2) No `fsync` per `Append` — Raft log replay is the recovery mechanism. (3) No time-based segment roll in v1. (4) `fallocate` fallback logs `warn`.

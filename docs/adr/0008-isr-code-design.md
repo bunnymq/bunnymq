@@ -105,7 +105,7 @@ sequenceDiagram
       CTRL-->>P: LeaderAndIsr(newISR, newPartitionEpoch)
                                                                                                                                                        
       P->>P: handleAlterPartitionUpdate()<br/>partitionState = CommittedPartitionState(newISR)<br/>isInflight=false                                    
-      Note over P: HW может вырасти - теперь не надо<br/>ждать отставшую реплику для коммита
+      Note over P: HW может вырасти — теперь не надо<br/>ждать отставшую реплику для коммита
       P->>P: maybeIncrementLeaderHW()                                                                                                                  
       P->>P: tryCompleteDelayedRequests()<br/>→ разблокирует producer acks=-1
 ```

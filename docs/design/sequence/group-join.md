@@ -1,4 +1,4 @@
-# Sequence: Consumer Group - JoinGroup
+# Sequence: Consumer Group — JoinGroup
 
 Full `JoinGroup` flow from the first member creating the group through a second member joining (triggering a rebalance). Both flows go through the metadata shard leader as the group coordinator.
 
@@ -9,7 +9,7 @@ Full `JoinGroup` flow from the first member creating the group through a second 
 ```mermaid
 sequenceDiagram
     participant C1 as Consumer-1 (client)
-    participant DAPI as DataService<br/>(coordinator node - metadata leader)
+    participant DAPI as DataService<br/>(coordinator node — metadata leader)
     participant GC as GroupCoordinator<br/>(in-process on coordinator node)
     participant RH as RaftHost
     participant MFSM as MetadataFSM
@@ -33,7 +33,7 @@ sequenceDiagram
 
     GC->>+RH: SyncProposeMetadata(JoinConsumerGroupCmd{<br/>group_id="shipping-svc",<br/>member={id="m-uuid-1", topics=["orders","payments"],<br/>session_timeout_ms=30000},<br/>new_assignment={m-uuid-1: [orders/0..7, payments/0..3]},<br/>new_generation_id=1})
 
-    RH->>MFSM: Update([JoinConsumerGroupCmd]) - quorum committed
+    RH->>MFSM: Update([JoinConsumerGroupCmd]) — quorum committed
     Note over MFSM: Create GroupState{<br/>  GroupID: "shipping-svc",<br/>  Members: {"m-uuid-1": MemberState{...}},<br/>  GenerationID: 1,<br/>  Assignments: {"m-uuid-1": [orders/0..7, payments/0..3]},<br/>  Offsets: {}  (empty, no commits yet)<br/>}
     MFSM-->>RH: sm.Result.Value = generationID=1
     RH-->>-GC: result
@@ -75,7 +75,7 @@ sequenceDiagram
 
     GC->>+RH: SyncProposeMetadata(JoinConsumerGroupCmd{<br/>group_id="shipping-svc",<br/>member={id="m-uuid-2", topics=["orders","payments"], session_timeout_ms=30000},<br/>new_assignment={<br/>  "m-uuid-1": [orders/0..3, payments/0,1],<br/>  "m-uuid-2": [orders/4..7, payments/2,3]},<br/>new_generation_id=2})
 
-    RH->>MFSM: Update([JoinConsumerGroupCmd]) - quorum committed
+    RH->>MFSM: Update([JoinConsumerGroupCmd]) — quorum committed
     Note over MFSM: Add m-uuid-2 to Members.<br/>Replace Assignments.<br/>GenerationID = 2.
     MFSM-->>RH: generationID=2
     RH-->>-GC: result
@@ -114,6 +114,6 @@ sequenceDiagram
 
 ## Notes
 
-- **Concurrent JoinGroup calls.** If two consumers join simultaneously, their `SyncPropose` calls are serialised by dragonboat's propose pipeline. Each commit produces a new generation. The first committer produces generation N; the second committer computes its assignment based on the FSM state it read before proposing - which may now be stale. The implementation must re-read the group state after commit to build the response, not use the pre-propose snapshot.
+- **Concurrent JoinGroup calls.** If two consumers join simultaneously, their `SyncPropose` calls are serialised by dragonboat's propose pipeline. Each commit produces a new generation. The first committer produces generation N; the second committer computes its assignment based on the FSM state it read before proposing — which may now be stale. The implementation must re-read the group state after commit to build the response, not use the pre-propose snapshot.
 - **Re-joining with existing member_id.** A client that already has a `member_id` (e.g. re-joining after a rebalance signal) sends it in the request. The coordinator treats this as an update to the existing member entry, reuses the same `member_id`, and recomputes the assignment. The `MemberState.JoinedAt` is not updated on re-join (it records the original join time).
 - **Validation of session_timeout_ms bounds.** Server enforces `1000 ≤ session_timeout_ms ≤ 300000`. Values outside this range return `INVALID_ARGUMENT`.

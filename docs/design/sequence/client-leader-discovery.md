@@ -1,6 +1,6 @@
 # Sequence: Client Leader Discovery
 
-How the client library learns the current partition leader - at startup (cold cache) and after a leader change (stale cache). Applies to both Producer and Consumer. The AdminClient uses the same bootstrap mechanism but never touches the per-partition leader cache.
+How the client library learns the current partition leader — at startup (cold cache) and after a leader change (stale cache). Applies to both Producer and Consumer. The AdminClient uses the same bootstrap mechanism but never touches the per-partition leader cache.
 
 ---
 
@@ -59,7 +59,7 @@ sequenceDiagram
     Client->>+CP: ConnFor("b3:9092")
     CP-->>-Client: conn (lazy dial if new address)
 
-    Client->>+NewLeader: DataService.Produce / Fetch (partition 0) - retry
+    Client->>+NewLeader: DataService.Produce / Fetch (partition 0) — retry
     NewLeader-->>-Client: OK response
 ```
 
@@ -77,7 +77,7 @@ sequenceDiagram
     Note over Client: MetaCache entry for "orders" has expired (TTL=60s).
 
     Client->>+MC: GetPartitionMeta("orders", partition_id=0)
-    MC-->>-Client: (miss - TTL expired)
+    MC-->>-Client: (miss — TTL expired)
 
     Note over Client: Fall back to full metadata fetch,<br/>same as cold-start path.
 
@@ -87,7 +87,7 @@ sequenceDiagram
     Client->>+AnyBroker: ManagementService.DescribeTopic("orders")
     AnyBroker-->>-Client: DescribeTopicResponse{partitions=[{leader_node_id=3, ...}, ...]}
 
-    Client->>+MC: SetTopicMeta("orders", ...) - refresh
+    Client->>+MC: SetTopicMeta("orders", ...) — refresh
     MC-->>-Client: ok
 
     Note over Client: Continue with Produce / Fetch using refreshed leaders.

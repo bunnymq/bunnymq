@@ -1,4 +1,4 @@
-# Sequence: Producer Send - Full Path (cache miss, NotLeader retry)
+# Sequence: Producer Send — Full Path (cache miss, NotLeader retry)
 
 Full `Producer.Send` flow including metadata cache population, leader resolution, and a NotLeader retry. The second call in a session to the same topic hits the warm cache and skips metadata fetch.
 
@@ -17,7 +17,7 @@ sequenceDiagram
     Note over P: 1. Partition selection.<br/>key != nil → FNV-1a(key) % partitionCount.<br/>Requires partitionCount → check MetaCache.
 
     P->>+MC: GetPartitionMeta("orders", partitionID=0)
-    MC-->>-P: (miss) - topic not in cache
+    MC-->>-P: (miss) — topic not in cache
 
     Note over P: 2. Metadata fetch from bootstrap server.
 
@@ -87,7 +87,7 @@ sequenceDiagram
     participant P as Producer
     participant MC as MetaCache
     participant CP as ConnPool
-    participant B2 as Broker-2<br/>(stale - no longer leader)
+    participant B2 as Broker-2<br/>(stale — no longer leader)
     participant B3 as Broker-3<br/>(new leader)
     participant DAPI3 as DataService<br/>(Broker-3)
 
@@ -103,7 +103,7 @@ sequenceDiagram
     Note over B2: Partition shard has a new leader.<br/>DataCoordinator returns NOT_LEADER.
     B2-->>-P: status=FAILED_PRECONDITION, BunnyErrorDetail{code=NOT_LEADER,<br/>NotLeaderDetail{leader_node_id=3, leader_address="broker-3:9092"}}
 
-    Note over P: Retry 1 (NOT_LEADER - immediate, no backoff).<br/>Update MetaCache from error detail. Retry on new leader.
+    Note over P: Retry 1 (NOT_LEADER — immediate, no backoff).<br/>Update MetaCache from error detail. Retry on new leader.
 
     P->>+MC: SetLeader("orders", 0, "broker-3:9092")
     MC-->>-P: ok
@@ -123,15 +123,15 @@ sequenceDiagram
 
 | Error code | Retry? | Backoff | Max retries | Cache action |
 |---|---|---|---|---|
-| `NOT_LEADER` | Yes (immediate) | None - new leader address is in the error | `maxRetries` (default 3) | `SetLeader(topic, partition, leaderAddr)` from `NotLeaderDetail` |
+| `NOT_LEADER` | Yes (immediate) | None — new leader address is in the error | `maxRetries` (default 3) | `SetLeader(topic, partition, leaderAddr)` from `NotLeaderDetail` |
 | `UNAVAILABLE` | Yes | Exponential: 50ms → 100ms → 200ms → … cap 5s | `maxRetries` | None |
 | `TIMEOUT` | Yes | Same as UNAVAILABLE | `maxRetries` | None |
-| `INVALID_ARGUMENT` | No | - | - | None |
-| `MESSAGE_TOO_LARGE` | No | - | - | None |
-| `BATCH_TOO_LARGE` | No | - | - | None |
-| `UNAUTHENTICATED` | No | - | - | None |
+| `INVALID_ARGUMENT` | No | — | — | None |
+| `MESSAGE_TOO_LARGE` | No | — | — | None |
+| `BATCH_TOO_LARGE` | No | — | — | None |
+| `UNAUTHENTICATED` | No | — | — | None |
 | `TOPIC_NOT_FOUND` | Refresh meta, then no | One metadata refresh, then surface to caller | 1 refresh | Full topic cache eviction |
-| `INVALID_MESSAGE_FORMAT` | No | - | - | None |
+| `INVALID_MESSAGE_FORMAT` | No | — | — | None |
 
 ## Notes
 

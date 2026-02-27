@@ -1,4 +1,4 @@
-// Список используемой литературы - ГОСТ 19.105-78
+// Список используемой литературы — ГОСТ 19.105-78
 #import "../templates/gost19.typ": gost-appendix-heading
 
 #gost-appendix-heading(num: "4", title: "СПИСОК ИСПОЛЬЗУЕМОЙ ЛИТЕРАТУРЫ")

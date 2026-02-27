@@ -1,5 +1,5 @@
 // =============================================================
-// Программа и методика испытаний - ГОСТ 19.301–79
+// Программа и методика испытаний — ГОСТ 19.301–79
 // «Система регистрации и управления жизненным циклом мероприятий»
 //
 // Обозначение документа (ГОСТ 19.103-77):
@@ -445,16 +445,16 @@ go test -bench=BenchmarkRateLimit -benchmem -run=^$
 Команды запуска:
 
 ```
-# Тест 1 - многосценарный (read path)
+# Тест 1 — многосценарный (read path)
 k6 run --out json=tests/load/results/prod_8cpu_v2.json \
        tests/load/k6_production_8cpu.js
 
-# Тест 2 - регистрация 100 RPS (write path)
+# Тест 2 — регистрация 100 RPS (write path)
 k6 run --out json=tests/load/results/registration_100rps.json \
        tests/load/k6_registration_100rps.js
 ```
 
-=== Сценарии тестирования (Тест~1 - read path)
+=== Сценарии тестирования (Тест~1 — read path)
 
 #gost-table(num: "6.4", caption: "Сценарии нагрузочного тестирования (Тест~1)")[
   #table(
@@ -470,7 +470,7 @@ k6 run --out json=tests/load/results/registration_100rps.json \
 
 Общая длительность: 6~минут (включая ramp-up 90~с и ramp-down 30~с).
 
-=== Профиль нагрузки (Тест~2 - регистрация 100~RPS)
+=== Профиль нагрузки (Тест~2 — регистрация 100~RPS)
 
 #gost-table(num: "6.5", caption: "Профиль нагрузки теста регистрации")[
   #table(
@@ -834,7 +834,7 @@ latency_waves          p95=19.62ms  p99=69.56ms   count=9001
 latency_tickets        p95=17.85ms  p99=33.88ms   count=9001
 latency_single_ticket  p95=16.25ms  p99=71.62ms   count=4501
 
-http_req_failed: 0.09%  (82 из 82504 - TCP-таймауты, не 5xx)
+http_req_failed: 0.09%  (82 из 82504 — TCP-таймауты, не 5xx)
 error_rate:      0.09%
 success_rate:    99.90%
 ```
@@ -863,7 +863,7 @@ registration_latency_ms (2xx only):
 registration_error_rate:   0.00%  (серверных ошибок 5xx нет)
 registration_success_rate: 100.00%
 
-* max 14.59s - единственный outlier (TCP-retry на клиенте), не 5xx
+* max 14.59s — единственный outlier (TCP-retry на клиенте), не 5xx
 ```
 
 Примечание: фактический RPS~72,5 (вместо целевых~100) обусловлен ограничениями сетевого стека WSL2 на клиентской машине. Серверных ошибок (5xx) --- 0 при любой нагрузке.

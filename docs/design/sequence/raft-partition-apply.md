@@ -1,6 +1,6 @@
 # raft-partition-apply: Applying a Produce Batch via the Partition FSM
 
-This diagram shows the produce path for both `acks=all` (via `SyncProposePartition`) and `acks=0` (via `ProposePartition`). In the `acks=all` path the Data Coordinator blocks until a quorum of partition replicas has committed the batch; the assigned `base_offset` is returned to the producer. In the `acks=0` path the Data Coordinator calls dragonboat's async `Propose` and returns immediately with no offset - durability is not guaranteed. The batch bytes travel as the raw payload of the Raft entry: one byte command-type prefix (`0x01`) followed by the batch bytes verbatim. Inside `Update()`, the Partition FSM calls `Storage.Append`, which assigns `base_offset`, writes the batch to the active log segment, and returns the assigned offset in `sm.Result.Value`.
+This diagram shows the produce path for both `acks=all` (via `SyncProposePartition`) and `acks=0` (via `ProposePartition`). In the `acks=all` path the Data Coordinator blocks until a quorum of partition replicas has committed the batch; the assigned `base_offset` is returned to the producer. In the `acks=0` path the Data Coordinator calls dragonboat's async `Propose` and returns immediately with no offset — durability is not guaranteed. The batch bytes travel as the raw payload of the Raft entry: one byte command-type prefix (`0x01`) followed by the batch bytes verbatim. Inside `Update()`, the Partition FSM calls `Storage.Append`, which assigns `base_offset`, writes the batch to the active log segment, and returns the assigned offset in `sm.Result.Value`.
 
 ```mermaid
 sequenceDiagram
@@ -28,7 +28,7 @@ sequenceDiagram
         RH->>DB: SyncPropose(ctx, clientSession, cmd)
 
         Note over DB: Leader appends to WAL; replicates to followers
-        DB->>FSM_F1: (Raft replication - AppendEntries RPC)
+        DB->>FSM_F1: (Raft replication — AppendEntries RPC)
         FSM_F1-->>DB: ACK
         Note over DB: Quorum reached. Entry committed.
 

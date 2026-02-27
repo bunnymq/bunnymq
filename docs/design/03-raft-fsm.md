@@ -1,6 +1,6 @@
-# Raft Host and FSMs - Detailed Design
+# Raft Host and FSMs — Detailed Design
 
-BunnyMQ uses dragonboat v4 as its Raft consensus engine. Each broker node runs a single `NodeHost` instance that hosts all Raft shards co-located on that node: one metadata shard (shard ID 0) and one partition shard per partition replica the node owns. The `internal/raft` package wraps dragonboat behind typed helpers so that no other module ever touches the dragonboat API directly. Two FSM types implement the application logic: `MetadataFSM` (`IStateMachine`) manages in-memory cluster topology and consumer group state; `PartitionFSM` (`IOnDiskStateMachine`) wraps `internal/storage` and applies produce commands durably to the partition log. All non-deterministic inputs - timestamps, random values - must arrive in command payloads; the FSMs themselves never call `time.Now()` or `rand`.
+BunnyMQ uses dragonboat v4 as its Raft consensus engine. Each broker node runs a single `NodeHost` instance that hosts all Raft shards co-located on that node: one metadata shard (shard ID 0) and one partition shard per partition replica the node owns. The `internal/raft` package wraps dragonboat behind typed helpers so that no other module ever touches the dragonboat API directly. Two FSM types implement the application logic: `MetadataFSM` (`IStateMachine`) manages in-memory cluster topology and consumer group state; `PartitionFSM` (`IOnDiskStateMachine`) wraps `internal/storage` and applies produce commands durably to the partition log. All non-deterministic inputs — timestamps, random values — must arrive in command payloads; the FSMs themselves never call `time.Now()` or `rand`.
 
 See [overview §5.2](./00-overview.md) for rationale behind the dragonboat choice, and [modules §5](./01-modules.md) for the dragonboat integration boundary.
 
@@ -33,7 +33,7 @@ rc := config.Config{
     HeartbeatRTT:       1,    // heartbeat = 1 × RTTMillisecond = 200 ms
     CheckQuorum:        true, // leader steps down if quorum unreachable
     MaxInMemLogSize:    32 << 20, // 32 MiB in-memory Raft log cap
-    SnapshotEntries:    1 << 62,  // effectively disabled (Strategy A - §4.3)
+    SnapshotEntries:    1 << 62,  // effectively disabled (Strategy A — §4.3)
     CompactionOverhead: 1 << 62,  // keep full Raft log; no compaction
 }
 ```
@@ -45,12 +45,12 @@ rc := config.Config{
 ```text
 Start:
   1. NewNodeHost(nhc)
-  2. StartCluster(initialMembers, join, metadataFSMFactory, rcMetadata)  - shard 0
+  2. StartCluster(initialMembers, join, metadataFSMFactory, rcMetadata)  — shard 0
   3. For each partition shard on this node: StartCluster(..., partitionFSMFactory, rcPartition)
 
 Graceful stop:
   1. Signal all coordinators to stop accepting requests
-  2. NodeHost.Close()  - closes all shards and their FSMs
+  2. NodeHost.Close()  — closes all shards and their FSMs
 ```
 
 `initialMembers` is `map[uint64]string` mapping NodeID → Raft address, populated from `config.Peers`. When a node joins an existing cluster (`join = true`), `initialMembers` is `nil` and dragonboat fetches shard state from peers.
@@ -90,8 +90,8 @@ Internally, `SyncProposeMetadata` calls `NodeHost.SyncPropose`; `ProposeMetadata
 
 | Shard ID | Role |
 |----------|------|
-| 0 | Metadata shard - hosts `MetadataFSM` |
-| 1 … N | Partition shards - one per partition replica on this node |
+| 0 | Metadata shard — hosts `MetadataFSM` |
+| 1 … N | Partition shards — one per partition replica on this node |
 
 **Mapping `(topic, partitionID) → shardID`:** assigned at partition creation time by the Metadata FSM. When `CreateTopic` is applied, the FSM consumes `N` values from its monotonically increasing `nextShardID` counter (one per partition) and stores `shardID` in each `PartitionMeta`. The mapping is therefore a metadata lookup:
 
@@ -212,7 +212,7 @@ Short JSON field names reduce snapshot size. Only one inner struct is non-nil pe
 
 ### 3.3 Range-Based Rebalance Algorithm
 
-Executed inside `Update()` for `JoinConsumerGroup`, `LeaveConsumerGroup`, and `RebalanceConsumerGroup`. All inputs come from the command payload or current FSM state - no external I/O.
+Executed inside `Update()` for `JoinConsumerGroup`, `LeaveConsumerGroup`, and `RebalanceConsumerGroup`. All inputs come from the command payload or current FSM state — no external I/O.
 
 ```go
 func rebalance(group *ConsumerGroupMeta, topics map[string]*TopicMeta, partitions map[PartitionKey]*PartitionMeta) {
@@ -283,7 +283,7 @@ func (fsm *MetadataFSM) RecoverFromSnapshot(r io.Reader, _ []sm.SnapshotFile, do
 }
 ```
 
-**Size estimate:** At maximum supported scale (1 000 topics × 100 partitions = 100 000 `PartitionMeta` entries, 100 consumer groups), JSON snapshot size ≈ 20–50 MiB. At course-project scale (tens of topics, few partitions each, handful of groups), ≈ 100–500 KiB. JSON serialization at 50 MiB takes ≈ 100 ms on a modern CPU - acceptable for a background snapshot operation.
+**Size estimate:** At maximum supported scale (1 000 topics × 100 partitions = 100 000 `PartitionMeta` entries, 100 consumer groups), JSON snapshot size ≈ 20–50 MiB. At course-project scale (tens of topics, few partitions each, handful of groups), ≈ 100–500 KiB. JSON serialization at 50 MiB takes ≈ 100 ms on a modern CPU — acceptable for a background snapshot operation.
 
 **Snapshot frequency:** dragonboat's `SnapshotEntries` for the metadata shard is set to a moderate value (e.g., 10 000 entries) so that metadata shard restarts don't replay thousands of old commands. This is different from the partition shard where snapshots are effectively disabled (Strategy A). Exact value is Open Question 3.
 
@@ -324,12 +324,12 @@ Partition commands are serialized with a 1-byte type prefix followed by a type-s
 
 | Type byte | Name | Payload |
 |-----------|------|---------|
-| `0x01` | `AppendBatch` | Raw batch bytes (as produced; `base_offset` field is ignored - Storage overwrites it) |
+| `0x01` | `AppendBatch` | Raw batch bytes (as produced; `base_offset` field is ignored — Storage overwrites it) |
 | `0x02` | `RetentionConfig` | JSON: `{"retention_ms": int64, "retention_bytes": int64}` |
 
 Using a raw prefix byte avoids JSON overhead for the `AppendBatch` case, where the payload can be up to 4 MiB.
 
-### 4.3 Open() - Partition Recovery
+### 4.3 Open() — Partition Recovery
 
 `Open(stopc <-chan struct{}) (uint64, error)` is called by dragonboat before any `Update()` or `Lookup()`. It returns the last applied Raft log index so dragonboat knows where to resume.
 
@@ -459,7 +459,7 @@ Reads are bounded by `storage.LatestOffset()`, which reflects only successfully 
 
 `Lookup` may be called concurrently with `Update` by dragonboat. Storage's concurrency model (§8 of [02-storage.md](./02-storage.md)) handles this safely.
 
-### 4.6 Snapshot Strategy - Strategy A (v1)
+### 4.6 Snapshot Strategy — Strategy A (v1)
 
 **Rationale:** Strategy A (no-op snapshots) is chosen for v1 because it eliminates snapshot implementation complexity while remaining correct for course-project workloads. The trade-off is an ever-growing Raft log and slower fresh-node bootstrap (full log replay). Strategy B (segment manifest snapshot) is the production path.
 
@@ -497,7 +497,7 @@ func (fsm *PartitionFSM) Sync() error {
 }
 ```
 
-**Strategy B (production path - appendix):** When dragonboat requests a snapshot, the FSM writes a manifest listing the sealed segment file paths and the last applied index, then transfers the segment files via `ISnapshotFileCollection.AddFile`. On recovery, the manifest is read and the files are copied into the partition directory, followed by `Storage.Open`. This bounds Raft log replay to entries after the snapshot index and enables efficient fresh-node replication. Strategy B is documented here as future work; it is NOT implemented in v1.
+**Strategy B (production path — appendix):** When dragonboat requests a snapshot, the FSM writes a manifest listing the sealed segment file paths and the last applied index, then transfers the segment files via `ISnapshotFileCollection.AddFile`. On recovery, the manifest is read and the files are copied into the partition directory, followed by `Storage.Open`. This bounds Raft log replay to entries after the snapshot index and enables efficient fresh-node replication. Strategy B is documented here as future work; it is NOT implemented in v1.
 
 ### 4.7 Failure Modes
 
@@ -539,4 +539,4 @@ These rules ensure that all replicas apply the same sequence of mutations and ar
 
 3. **`Sync()` vs `persistApplied` in `Update()`:** The current design calls `persistApplied` (fsync + sidecar) at the end of every `Update()` batch. dragonboat also provides a `Sync()` hook that it calls periodically. Should we defer the fsync to `Sync()` to reduce write amplification when dragonboat delivers many small batches? Trade-off: deferred fsync means a crash between `Update()` and `Sync()` loses progress, requiring re-apply; immediate fsync in `Update()` adds latency but ensures the sidecar is always consistent.
 
-4. ~~**`Storage.Sync()` method:**~~ Resolved - `Sync() error` and `TruncateTo(offset int64) error` have been added to the `Storage` interface in [02-storage.md](./02-storage.md).
+4. ~~**`Storage.Sync()` method:**~~ Resolved — `Sync() error` and `TruncateTo(offset int64) error` have been added to the `Storage` interface in [02-storage.md](./02-storage.md).

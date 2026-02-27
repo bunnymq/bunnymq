@@ -1,4 +1,4 @@
-# CLAUDE.md - BunnyMQ Design Phase (Session 4: Stage 4 - Tickets)
+# CLAUDE.md — BunnyMQ Design Phase (Session 4: Stage 4 — Tickets)
 
 ## Project context
 
@@ -24,8 +24,8 @@ On every session start, before doing anything else:
    - `docs/design/08-consumer-groups.md`
    - `docs/design/09-metrics-logging.md`
    - All files in `docs/design/sequence/`
-4. Note any unresolved `VERIFY` markers and open questions in the design documents. Aggregate them into a single list - these become tickets in milestone M0 (see below) or are flagged to the user as blockers.
-5. List existing files in `docs/tickets/`. If non-empty, report to user before doing anything else - this session expects to produce all tickets fresh.
+4. Note any unresolved `VERIFY` markers and open questions in the design documents. Aggregate them into a single list — these become tickets in milestone M0 (see below) or are flagged to the user as blockers.
+5. List existing files in `docs/tickets/`. If non-empty, report to user before doing anything else — this session expects to produce all tickets fresh.
 6. Confirm to the user in chat that you are starting Stage 4 and ask for go-ahead.
 
 ## Architectural decisions (fixed; not for redesign)
@@ -59,9 +59,9 @@ These are not open for discussion. The tickets you write must conform to them.
 - Override any architectural decision.
 - Begin implementing any ticket. Tickets describe future work to be done in later sessions.
 
-### Hallucination protocol - same as previous sessions, with implementation focus
+### Hallucination protocol — same as previous sessions, with implementation focus
 
-Tickets describe work. Each ticket points the future implementer at specific design documents and requirements. The risk in this session is **not** inventing API surface - that work is done - but rather:
+Tickets describe work. Each ticket points the future implementer at specific design documents and requirements. The risk in this session is **not** inventing API surface — that work is done — but rather:
 
 1. **Inventing a ticket scope that contradicts the design.** Before writing each ticket, re-read the relevant design section and quote it (or link to it) in the ticket.
 2. **Fabricating effort estimates.** Estimates here are coarse (XS/S/M/L). Use them to flag relative size, not as commitments.
@@ -118,11 +118,11 @@ docs/
 
 Each ticket is a separate markdown file in the appropriate milestone directory. Filenames: `T-NNN-short-slug.md`, where `NNN` is a zero-padded sequential number across all milestones (so M0 holds T-001 onwards, M1 continues numbering, etc.).
 
-## Milestones - definition
+## Milestones — definition
 
 Each milestone has an explicit definition of "done" (DoD) at the milestone level, separate from per-ticket DoDs. The milestone DoD is what makes the milestone a meaningful checkpoint where the project could be paused or demoed.
 
-### M0 - Foundations
+### M0 — Foundations
 
 **Goal:** resolve outstanding design questions, set up the repository skeleton, and establish CI/build basics so subsequent milestones don't trip on infrastructure.
 
@@ -140,7 +140,7 @@ Each milestone has an explicit definition of "done" (DoD) at the milestone level
 - Proto codegen pipeline ticket.
 - Build tooling ticket.
 
-### M1 - Storage standalone
+### M1 — Storage standalone
 
 **Goal:** Storage module fully works as designed in `02-storage.md`, with comprehensive unit tests and a CLI smoke-test tool.
 
@@ -162,9 +162,9 @@ Each milestone has an explicit definition of "done" (DoD) at the milestone level
 - Recovery on startup.
 - CLI debug tool.
 
-### M2 - Raft + FSMs on a single node
+### M2 — Raft + FSMs on a single node
 
-**Goal:** dragonboat NodeHost wrapper, Metadata FSM, and Partition FSM all work on a single node. The node can create a topic, append messages to a partition, and read them back - all going through Raft `Apply` → FSM → Storage. No clustering yet, but the code paths used in clustering are exercised.
+**Goal:** dragonboat NodeHost wrapper, Metadata FSM, and Partition FSM all work on a single node. The node can create a topic, append messages to a partition, and read them back — all going through Raft `Apply` → FSM → Storage. No clustering yet, but the code paths used in clustering are exercised.
 
 **Milestone DoD:**
 - NodeHost wrapper boots, runs the metadata shard, and accepts `SyncPropose` for topic creation.
@@ -187,17 +187,17 @@ Each milestone has an explicit definition of "done" (DoD) at the milestone level
 - FSM determinism tests.
 - Single-node restart test.
 
-### M3 - 3-node cluster with produce/fetch
+### M3 — 3-node cluster with produce/fetch
 
 **Goal:** a 3-node cluster running on the local machine successfully serves end-to-end produce and fetch traffic from a Go client over gRPC, with replication factor 3, with leader failover.
 
 **Milestone DoD:**
 - ClusterCoordinator and DataCoordinator are implemented.
 - Management API gRPC service is implemented and serving.
-- Data API gRPC service is implemented (Produce, Fetch, GetOffsets) - JoinGroup/Heartbeat/etc. land in M4.
+- Data API gRPC service is implemented (Produce, Fetch, GetOffsets) — JoinGroup/Heartbeat/etc. land in M4.
 - Client library Producer and basic Consumer (no group, manual partitions) are implemented.
 - AdminClient is implemented (CreateTopic, DescribeTopic, DescribeCluster, etc.).
-- A 3-node cluster started via 3 separate processes (no docker yet - that's M5) successfully:
+- A 3-node cluster started via 3 separate processes (no docker yet — that's M5) successfully:
   - Creates a topic with RF=3 and 3 partitions.
   - Accepts produce(acks=all) and returns offsets.
   - Replicates batches across all 3 nodes' Storage.
@@ -219,7 +219,7 @@ Each milestone has an explicit definition of "done" (DoD) at the milestone level
 - Multi-process local cluster smoke test.
 - Leader-failover smoke test.
 
-### M4 - Consumer groups
+### M4 — Consumer groups
 
 **Goal:** consumer groups with range-based rebalance work end-to-end. Multiple consumers in a group split partitions; member crash triggers rebalance; offsets commit and survive restart.
 
@@ -246,7 +246,7 @@ Each milestone has an explicit definition of "done" (DoD) at the milestone level
 - Client Consumer: rebalance handling (graceful re-join).
 - Group end-to-end integration test.
 
-### M5 - Integration, observability, and polish
+### M5 — Integration, observability, and polish
 
 **Goal:** the system runs on docker-compose with 3 nodes, full integration tests pass with simulated node kills, metrics are exposed, logging is uniform, retention enforces visibly during a demo.
 
@@ -282,7 +282,7 @@ Every ticket file uses this template exactly:
 ```markdown
 # T-NNN: <Short title>
 
-**Milestone:** M<N> - <milestone name>
+**Milestone:** M<N> — <milestone name>
 **Effort:** XS | S | M | L
 **Status:** TODO
 
@@ -342,18 +342,18 @@ References:
 
 ### Effort sizing
 
-- **XS** - under 1 hour. Trivial config, single-function utility, doc tweak.
-- **S** - 1-2 hours. Single focused implementation with tests, no cross-module work.
-- **M** - 2-4 hours. **This is the target size for most tickets.** Real implementation work with tests, possibly touching 2-3 files.
-- **L** - 4-8 hours. Used sparingly; if you find yourself estimating L, consider splitting.
+- **XS** — under 1 hour. Trivial config, single-function utility, doc tweak.
+- **S** — 1-2 hours. Single focused implementation with tests, no cross-module work.
+- **M** — 2-4 hours. **This is the target size for most tickets.** Real implementation work with tests, possibly touching 2-3 files.
+- **L** — 4-8 hours. Used sparingly; if you find yourself estimating L, consider splitting.
 
 Aim for the majority of tickets to be **M**. The user requested medium-sized tickets grouped by milestone. If a planned ticket would be L, prefer splitting unless the work is genuinely indivisible.
 
 ### Tests requirement
 
-Every implementation ticket **must** include a `Tests required` section listing specific tests to write. This was a deliberate user request to combat hallucination drift: tests written alongside implementation catch wrong assumptions early. Tickets that produce no testable artifact (e.g. README writing) may state "N/A - no executable tests" but must justify this in the section.
+Every implementation ticket **must** include a `Tests required` section listing specific tests to write. This was a deliberate user request to combat hallucination drift: tests written alongside implementation catch wrong assumptions early. Tickets that produce no testable artifact (e.g. README writing) may state "N/A — no executable tests" but must justify this in the section.
 
-## Master index - `docs/tickets/README.md`
+## Master index — `docs/tickets/README.md`
 
 This file is produced last, after all milestone directories are filled. Contents:
 
@@ -368,12 +368,12 @@ This file is produced last, after all milestone directories are filled. Contents
 
 This session is split by milestone, not by ticket. Approval is per-milestone.
 
-1. Start with **M0 - Foundations**. Produce all tickets for M0. Post `Milestone M0 complete: <count> tickets`. Summarize what's in M0, list any unresolved VERIFY items that became their own tickets, ask for approval.
-2. After user approval, proceed to **M1 - Storage standalone**. Same protocol: `Milestone M1 complete: <count> tickets`.
-3. After user approval, proceed to **M2 - Raft + FSMs on single node**. Same protocol.
-4. After user approval, proceed to **M3 - 3-node cluster with produce/fetch**. Same protocol.
-5. After user approval, proceed to **M4 - Consumer groups**. Same protocol.
-6. After user approval, proceed to **M5 - Integration and polish**. Same protocol.
+1. Start with **M0 — Foundations**. Produce all tickets for M0. Post `Milestone M0 complete: <count> tickets`. Summarize what's in M0, list any unresolved VERIFY items that became their own tickets, ask for approval.
+2. After user approval, proceed to **M1 — Storage standalone**. Same protocol: `Milestone M1 complete: <count> tickets`.
+3. After user approval, proceed to **M2 — Raft + FSMs on single node**. Same protocol.
+4. After user approval, proceed to **M3 — 3-node cluster with produce/fetch**. Same protocol.
+5. After user approval, proceed to **M4 — Consumer groups**. Same protocol.
+6. After user approval, proceed to **M5 — Integration and polish**. Same protocol.
 7. After user approval, produce `docs/tickets/README.md` (the master index). Post `Master index complete`. Wait for approval.
 8. After approval, post a session-end summary listing total ticket counts per milestone, total estimated effort range, the recommended-order sequence as a numbered list, and any unresolved blockers.
 
@@ -385,7 +385,7 @@ If the user requests changes to a completed milestone, apply them, re-post the m
 
 - All artifacts in **English**.
 - All diagrams in **mermaid**.
-- Be specific. Avoid "implement Storage" - write "implement `Storage.Append` with single-writer mutex, returning the assigned base offset; covered by `TestStorageAppend_*` test cases listed below".
+- Be specific. Avoid "implement Storage" — write "implement `Storage.Append` with single-writer mutex, returning the assigned base offset; covered by `TestStorageAppend_*` test cases listed below".
 - Cross-reference design docs by relative path: `[02-storage.md §3](../design/02-storage.md#3-...)`.
 - Do not duplicate design content into tickets. Tickets point to design; they do not restate it.
 - One ticket per file. No combining.
@@ -395,7 +395,7 @@ If the user requests changes to a completed milestone, apply them, re-post the m
 - **Tickets that just say "implement module X".** Always break down by method, by file, or by feature within a module.
 - **Tickets without explicit tests.** Every implementation ticket lists specific test names.
 - **Circular dependencies between tickets.** If discovered, raise to user.
-- **Silent dependency on un-designed behavior.** If a ticket would require behavior not specified in design docs, raise to user - design phase needs to be reopened, briefly, before that ticket can be written.
+- **Silent dependency on un-designed behavior.** If a ticket would require behavior not specified in design docs, raise to user — design phase needs to be reopened, briefly, before that ticket can be written.
 - **Time-based estimates pretending precision.** Use XS/S/M/L bins; do not write "2.5 hours".
 - **Tickets that mix milestones.** A ticket belongs to exactly one milestone. If it spans, split.
 

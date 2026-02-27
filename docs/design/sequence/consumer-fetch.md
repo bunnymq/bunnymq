@@ -15,7 +15,7 @@ sequenceDiagram
     DAPI->>+DC: Fetch(ctx, topic, partitionID, 100, 1MiB, 0)
 
     DC->>RH: LookupMetadata(QueryGetPartition{topic, partitionID})
-    Note over RH: ReadLocalNode - no Raft round-trip
+    Note over RH: ReadLocalNode — no Raft round-trip
     RH-->>DC: *PartitionMeta{LeaderNodeID=this node, ShardID}
 
     alt this node is NOT the leader
@@ -47,14 +47,14 @@ sequenceDiagram
 
 `Read(offset, maxBytes)` returns one or more **complete batches** (never partial). Each batch is in the on-disk/on-wire format ([REQUIREMENTS.md §4.4](../../REQUIREMENTS.md)). The client parses them by reading `batch_length` from the header.
 
-`nextOffset` = `base_offset + record_count` of the last returned batch. The consumer uses this as the `offset` argument in the next `Fetch` call - it is the first offset not yet seen.
+`nextOffset` = `base_offset + record_count` of the last returned batch. The consumer uses this as the `offset` argument in the next `Fetch` call — it is the first offset not yet seen.
 
 ## Read path detail
 
 1. **Segment routing.** `Storage` binary-searches its `[]SegmentStorage` slice by `base_offset` to find the segment containing the requested offset. (Acquires `segMu.RLock`; releases before file I/O.)
 2. **Index lookup.** Binary search the segment's mmap'd `.index` file for the largest `relative_offset ≤ (offset − segment.base_offset)`. This gives a file position to start scanning.
 3. **Log scan.** Read batches sequentially from that position, skipping any batch whose range does not include `offset`. Collect complete batches until `maxBytes` is consumed or data is exhausted.
-4. **Boundary.** Reads are bounded by the current `LatestOffset()`, which equals `storage.nextOffset` - the byte frontier of all committed and applied entries. No incomplete batch bytes are ever returned.
+4. **Boundary.** Reads are bounded by the current `LatestOffset()`, which equals `storage.nextOffset` — the byte frontier of all committed and applied entries. No incomplete batch bytes are ever returned.
 
 ## Error cases
 

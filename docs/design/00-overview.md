@@ -1,4 +1,4 @@
-# BunnyMQ - High-Level Overview
+# BunnyMQ — High-Level Overview
 
 BunnyMQ is a Kafka-like distributed message broker written in Go, designed for a course project with a one-week implementation budget. It provides topics, partitions, consumer groups, replicated durable storage, and configurable delivery guarantees (`acks=0` and `acks=all`). The system targets clusters of three or more nodes, where horizontal scalability is achieved via partitioning and fault tolerance via Raft quorum replication managed by the dragonboat library.
 
@@ -27,7 +27,7 @@ graph TB
             PartFSM["Partition FSM\n(IOnDiskStateMachine)"]
             STR[Storage]
         end
-        subgraph DB["dragonboat (Raft library - black box)"]
+        subgraph DB["dragonboat (Raft library — black box)"]
             NH["NodeHost\n· metadata shard\n· one shard per partition"]
         end
     end
@@ -65,18 +65,18 @@ graph TB
 
 ## 2. Key Modules
 
-1. **Storage** - Segmented append-only log, Kafka-style. Manages `LogSegment` files, mmap'd `OffsetIndexSegment` and `TimeIndexSegment`, and the segment roll lifecycle.
-2. **Raft Host** - Thin wrapper around dragonboat's `NodeHost`. Initialises the NodeHost, registers FSMs for the metadata shard and each partition shard, and provides typed Propose/SyncPropose helpers to the rest of the system.
-3. **Metadata FSM** - `IStateMachine` managing cluster-wide metadata in memory (topics, partitions, replica placement, node list). Snapshot format is JSON.
-4. **Partition FSM** - `IOnDiskStateMachine` wrapping Storage. Its `Update()` method is strictly deterministic: it calls into Storage to append batches and advance the committed index; no `time.Now()` or network I/O is allowed inside.
-5. **Cluster Coordinator** - Sole writer to the Metadata FSM. Handles topic lifecycle (create, delete, alter), partition assignment across nodes, and reacts to leader-election signals surfaced by dragonboat.
-6. **Data Coordinator** - Routes produce and fetch requests to the correct partition shard leader, dispatches `Propose`/`SyncPropose` calls, and enforces the `acks` contract.
-7. **Group Coordinator** - Manages consumer group state: join/leave/heartbeat/rebalance lifecycle and offset commit/fetch. Stores committed offsets via the Metadata FSM.
-8. **Management API** - gRPC server exposing the Admin API (topic and cluster management) and Consumer Group API (join, heartbeat, leave, offset commit/fetch).
-9. **Data API** - gRPC server exposing the Producer API (produce) and Consumer API (fetch, offset queries). Routes requests through the Data Coordinator.
-10. **Client Library** - Public Go library (`pkg/client`) providing `Producer`, `Consumer`, and `AdminClient` types with connection management, partition routing, and auto-commit convenience.
-11. **Metrics & Logging** - Prometheus metrics endpoint and structured JSON/logfmt logging. Metrics include per-partition produce/fetch rates, latency histograms, and consumer group lag.
-12. **CLI** - `cobra`-based command-line tool (`cmd/bunnymq`) wrapping the Client Library. Provides `produce`, `consume`, `topic`, and `cluster` subcommands for manual interaction with a BunnyMQ cluster.
+1. **Storage** — Segmented append-only log, Kafka-style. Manages `LogSegment` files, mmap'd `OffsetIndexSegment` and `TimeIndexSegment`, and the segment roll lifecycle.
+2. **Raft Host** — Thin wrapper around dragonboat's `NodeHost`. Initialises the NodeHost, registers FSMs for the metadata shard and each partition shard, and provides typed Propose/SyncPropose helpers to the rest of the system.
+3. **Metadata FSM** — `IStateMachine` managing cluster-wide metadata in memory (topics, partitions, replica placement, node list). Snapshot format is JSON.
+4. **Partition FSM** — `IOnDiskStateMachine` wrapping Storage. Its `Update()` method is strictly deterministic: it calls into Storage to append batches and advance the committed index; no `time.Now()` or network I/O is allowed inside.
+5. **Cluster Coordinator** — Sole writer to the Metadata FSM. Handles topic lifecycle (create, delete, alter), partition assignment across nodes, and reacts to leader-election signals surfaced by dragonboat.
+6. **Data Coordinator** — Routes produce and fetch requests to the correct partition shard leader, dispatches `Propose`/`SyncPropose` calls, and enforces the `acks` contract.
+7. **Group Coordinator** — Manages consumer group state: join/leave/heartbeat/rebalance lifecycle and offset commit/fetch. Stores committed offsets via the Metadata FSM.
+8. **Management API** — gRPC server exposing the Admin API (topic and cluster management) and Consumer Group API (join, heartbeat, leave, offset commit/fetch).
+9. **Data API** — gRPC server exposing the Producer API (produce) and Consumer API (fetch, offset queries). Routes requests through the Data Coordinator.
+10. **Client Library** — Public Go library (`pkg/client`) providing `Producer`, `Consumer`, and `AdminClient` types with connection management, partition routing, and auto-commit convenience.
+11. **Metrics & Logging** — Prometheus metrics endpoint and structured JSON/logfmt logging. Metrics include per-partition produce/fetch rates, latency histograms, and consumer group lag.
+12. **CLI** — `cobra`-based command-line tool (`cmd/bunnymq`) wrapping the Client Library. Provides `produce`, `consume`, `topic`, and `cluster` subcommands for manual interaction with a BunnyMQ cluster.
 
 ---
 
@@ -123,11 +123,11 @@ graph TB
 
 ### 5.1 Language: Go
 
-Go was chosen for its first-class concurrency primitives (goroutines, channels, `sync` primitives), a strong standard library covering networking and file I/O, and a simple deployment model (single static binary, no JVM warmup). The main alternative was Java or Kotlin - the language Kafka itself is written in - which offers deep Kafka ecosystem integration and mature performance tuning. For a one-week implementation budget and a course project, Go's lower operational overhead and faster compile-test cycle outweigh the familiarity benefit of matching Kafka's runtime.
+Go was chosen for its first-class concurrency primitives (goroutines, channels, `sync` primitives), a strong standard library covering networking and file I/O, and a simple deployment model (single static binary, no JVM warmup). The main alternative was Java or Kotlin — the language Kafka itself is written in — which offers deep Kafka ecosystem integration and mature performance tuning. For a one-week implementation budget and a course project, Go's lower operational overhead and faster compile-test cycle outweigh the familiarity benefit of matching Kafka's runtime.
 
 ### 5.2 Consensus and Replication: dragonboat v4, Multi-Raft
 
-dragonboat provides a production-grade, battle-tested Raft implementation with built-in multi-raft support, pluggable FSM interfaces, and snapshot management. By delegating consensus to dragonboat, BunnyMQ eliminates the need to implement leader election, log replication, ISR tracking, follower-fetch loops, and high-watermark bookkeeping. The alternative - manual ISR replication (modelled in the historical ADRs) - requires a bespoke follower-fetch protocol, a separate controller role, and careful handling of leader failover; this complexity is exactly what Raft subsumes. One dragonboat shard per partition means each partition has an independent Raft group: partitions do not block each other's consensus rounds.
+dragonboat provides a production-grade, battle-tested Raft implementation with built-in multi-raft support, pluggable FSM interfaces, and snapshot management. By delegating consensus to dragonboat, BunnyMQ eliminates the need to implement leader election, log replication, ISR tracking, follower-fetch loops, and high-watermark bookkeeping. The alternative — manual ISR replication (modelled in the historical ADRs) — requires a bespoke follower-fetch protocol, a separate controller role, and careful handling of leader failover; this complexity is exactly what Raft subsumes. One dragonboat shard per partition means each partition has an independent Raft group: partitions do not block each other's consensus rounds.
 
 ### 5.3 Wire Protocol: gRPC + Protobuf
 
@@ -139,15 +139,15 @@ gRPC gives structured, strongly typed APIs with built-in flow control, streaming
 
 ### 5.5 Storage: Segmented Append-Only Log, Kafka-Style
 
-The segment model is well suited to sequential-write workloads: all writes append to the active segment, avoiding random I/O. Sparse offset and time indexes (one entry per ~4 KiB) provide O(log n) point lookups via binary search on mmap'd index files followed by a short linear scan. Keeping batch format identical on disk and over the wire means the storage layer can be tested independently from the network layer and enables a future zero-copy read path. The alternative - an embedded key-value store (e.g. RocksDB, bbolt) - handles random writes more gracefully but adds unnecessary overhead for strictly sequential workloads and breaks the wire-format identity property.
+The segment model is well suited to sequential-write workloads: all writes append to the active segment, avoiding random I/O. Sparse offset and time indexes (one entry per ~4 KiB) provide O(log n) point lookups via binary search on mmap'd index files followed by a short linear scan. Keeping batch format identical on disk and over the wire means the storage layer can be tested independently from the network layer and enables a future zero-copy read path. The alternative — an embedded key-value store (e.g. RocksDB, bbolt) — handles random writes more gracefully but adds unnecessary overhead for strictly sequential workloads and breaks the wire-format identity property.
 
 ### 5.6 Metadata FSM: IStateMachine (In-Memory, JSON Snapshots)
 
-Cluster metadata (topics, partitions, node list, consumer group state) changes infrequently and fits comfortably in memory even at the maximum supported scale (1000 topics × 100 partitions). An in-memory `IStateMachine` is simpler to implement and reason about than an on-disk one. JSON snapshots are human-readable, easy to debug, and sufficient for the low snapshot frequency of metadata. The alternative - `IOnDiskStateMachine` for metadata - would add file management complexity with no throughput benefit, since metadata operations are not on the hot path.
+Cluster metadata (topics, partitions, node list, consumer group state) changes infrequently and fits comfortably in memory even at the maximum supported scale (1000 topics × 100 partitions). An in-memory `IStateMachine` is simpler to implement and reason about than an on-disk one. JSON snapshots are human-readable, easy to debug, and sufficient for the low snapshot frequency of metadata. The alternative — `IOnDiskStateMachine` for metadata — would add file management complexity with no throughput benefit, since metadata operations are not on the hot path.
 
 ### 5.7 Partition FSM: IOnDiskStateMachine
 
-Partition data is written continuously and cannot be held in memory. `IOnDiskStateMachine` instructs dragonboat to call into the FSM's own recovery path (via Storage) when replaying from a snapshot or restarting after a crash, rather than loading the entire state into memory. The FSM's `Update()` method appends committed Raft entries to the Storage layer; its determinism constraint (no `time.Now()`, no `rand` without an explicit seed in the command, no network I/O) ensures that all replicas apply the same sequence of writes and arrive at identical state. The alternative - a memory-based FSM that flushes to disk asynchronously - would require duplicating snapshot logic already handled by `IOnDiskStateMachine`.
+Partition data is written continuously and cannot be held in memory. `IOnDiskStateMachine` instructs dragonboat to call into the FSM's own recovery path (via Storage) when replaying from a snapshot or restarting after a crash, rather than loading the entire state into memory. The FSM's `Update()` method appends committed Raft entries to the Storage layer; its determinism constraint (no `time.Now()`, no `rand` without an explicit seed in the command, no network I/O) ensures that all replicas apply the same sequence of writes and arrive at identical state. The alternative — a memory-based FSM that flushes to disk asynchronously — would require duplicating snapshot logic already handled by `IOnDiskStateMachine`.
 
 ### 5.8 Consumer Groups: Minimal v1, Range-Based Assignment
 
@@ -155,7 +155,7 @@ Range-based assignment is deterministic and stateless: partitions are sorted by 
 
 ### 5.9 Tests: Unit Tests for Storage and FSM + Docker-Compose Integration Tests
 
-Storage and FSM correctness cannot be validated through mocks: file-offset arithmetic, index binary search, segment roll conditions, and Raft commit ordering must be exercised against real I/O. Unit tests catch regressions at the module boundary without requiring a running cluster. Integration tests via docker-compose with node-kill scenarios verify the most important system property - durability and availability under node failure - end-to-end. These two layers together give enough confidence for a course project while keeping test infrastructure manageable.
+Storage and FSM correctness cannot be validated through mocks: file-offset arithmetic, index binary search, segment roll conditions, and Raft commit ordering must be exercised against real I/O. Unit tests catch regressions at the module boundary without requiring a running cluster. Integration tests via docker-compose with node-kill scenarios verify the most important system property — durability and availability under node failure — end-to-end. These two layers together give enough confidence for a course project while keeping test infrastructure manageable.
 
 ---
 

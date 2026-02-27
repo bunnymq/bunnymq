@@ -1,4 +1,4 @@
-// Приложение А: Глоссарий - ГОСТ 19.105-78
+// Приложение А: Глоссарий — ГОСТ 19.105-78
 #import "../templates/gost19.typ": glos-entry, gost-appendix-heading
 
 #gost-appendix-heading(num: "1", title: "ГЛОССАРИЙ И СОКРАЩЕНИЯ")

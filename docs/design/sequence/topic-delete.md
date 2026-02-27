@@ -17,7 +17,7 @@ sequenceDiagram
     MAPI->>+CC: DeleteTopic(ctx, name)
 
     CC->>RH: LookupMetadata(QueryGetTopic{name})
-    Note over RH: ReadLocalNode - no Raft round-trip
+    Note over RH: ReadLocalNode — no Raft round-trip
     RH-->>CC: *TopicMeta (exists) or nil
 
     alt topic not found
@@ -47,7 +47,7 @@ sequenceDiagram
         Note over CCN: reconcileLoop fires on each node<br/>(within reconcile_interval_ms, default 3 s)
 
         CCN->>+RH: LookupMetadata(QueryListAllPartitions)
-        RH-->>-CCN: all PartitionMeta[] - topic's partitions absent
+        RH-->>-CCN: all PartitionMeta[] — topic's partitions absent
 
         Note over CCN: Detect shards in runningShards with no<br/>corresponding PartitionMeta (orphaned)
 
@@ -66,7 +66,7 @@ sequenceDiagram
 
 ## Notes
 
-- **Async teardown window:** Between the `DeleteTopicResponse (OK)` and the completion of the reconciliation loop, partition shards are still running. During this window, produces routed to those shards succeed at the Raft level - but since the topic is absent from metadata, the routing layer returns `TopicNotFound` before reaching the shard, so no new data is actually written.
-- **Concurrent operations during teardown:** A `CreateTopic` for the same name issued after `DeleteTopic` returns can proceed immediately (metadata is clean). If the new topic creation assigns the same shard IDs (impossible - `NextShardID` is monotonically increasing and never reuses IDs), there would be a conflict. Because shard IDs are never reused, old shard teardown and new shard startup for the same name cannot collide.
+- **Async teardown window:** Between the `DeleteTopicResponse (OK)` and the completion of the reconciliation loop, partition shards are still running. During this window, produces routed to those shards succeed at the Raft level — but since the topic is absent from metadata, the routing layer returns `TopicNotFound` before reaching the shard, so no new data is actually written.
+- **Concurrent operations during teardown:** A `CreateTopic` for the same name issued after `DeleteTopic` returns can proceed immediately (metadata is clean). If the new topic creation assigns the same shard IDs (impossible — `NextShardID` is monotonically increasing and never reuses IDs), there would be a conflict. Because shard IDs are never reused, old shard teardown and new shard startup for the same name cannot collide.
 - **Storage directory deletion failure:** If `os.RemoveAll` fails (e.g. file descriptor still held), the reconcile goroutine removes the shard from `runningShards` regardless. Stale storage directories are not retried inline; a manual cleanup or restart is needed. This is acceptable for v1.
 - **Multi-node consistency:** The metadata FSM update applies identically on all replica nodes. The reconcile goroutine on each node independently detects the orphaned shard and cleans up its local storage. No coordination between nodes is needed for teardown.

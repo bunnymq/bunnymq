@@ -1,4 +1,4 @@
-# API Protocol - Detailed Design
+# API Protocol — Detailed Design
 
 BunnyMQ exposes two gRPC services: `ManagementService` for admin and cluster operations, and `DataService` for produce, fetch, and consumer-group operations. Each service binds to its own configurable port to allow independent network-policy control. Both services share the same authentication mechanism (token in gRPC metadata) and the same server-side interceptor chain. All Protobuf message types live in the `bunnymq.v1` package; generated Go code is committed to `pkg/proto/v1/`. The on-wire batch format for produce and fetch is identical to the on-disk format specified in [02-storage.md §3.2](./02-storage.md) and [REQUIREMENTS.md §4.4](../REQUIREMENTS.md): the client encodes before sending; the server stores as-is.
 
@@ -33,10 +33,10 @@ Source files in `api/` at the repo root (per [01-modules.md §1](./01-modules.md
 
 ```
 api/
-├── common.proto       - shared message types (TopicInfo, PartitionInfo, etc.)
-├── errors.proto       - BunnyErrorCode enum, NotLeaderDetail
-├── management.proto   - ManagementService definition and messages
-└── data.proto         - DataService definition and messages
+├── common.proto       — shared message types (TopicInfo, PartitionInfo, etc.)
+├── errors.proto       — BunnyErrorCode enum, NotLeaderDetail
+├── management.proto   — ManagementService definition and messages
+└── data.proto         — DataService definition and messages
 ```
 
 Generated Go code committed to `pkg/proto/v1/`. Not hand-edited.
@@ -302,7 +302,7 @@ message ProduceRequest {
   AcksMode acks         = 3;
   // batch_data: a complete batch encoded in the on-disk/on-wire format
   // (REQUIREMENTS.md §4.4 and 02-storage.md §3.2).
-  // The base_offset field in the batch header is ignored by the server -
+  // The base_offset field in the batch header is ignored by the server —
   // Storage overwrites it with the server-assigned offset.
   // Max size: 4 MiB (REQUIREMENTS.md §5). Exceeding this returns BATCH_TOO_LARGE.
   bytes    batch_data   = 4;
@@ -452,7 +452,7 @@ Both `Produce` and `Fetch` are **unary RPCs** in v1. This section documents the 
 | Unary (v1) | 1 RTT per RPC | Limited by per-RPC overhead | Minimal |
 | Bidirectional streaming | Amortised; multiple batches in-flight | High; pipelining within one shard | Requires stream lifecycle management, flow control, error propagation |
 
-With unary produce, a client sending one batch per 5 ms (200 batches/s) would pay 200 RPC round-trips per second. For the demo-quality throughput target ("tens of thousands of messages per second per partition", REQUIREMENTS.md §6.2), batching within each RPC (multiple records per batch) reduces this cost significantly - the batch is the unit of the RPC, not the individual record.
+With unary produce, a client sending one batch per 5 ms (200 batches/s) would pay 200 RPC round-trips per second. For the demo-quality throughput target ("tens of thousands of messages per second per partition", REQUIREMENTS.md §6.2), batching within each RPC (multiple records per batch) reduces this cost significantly — the batch is the unit of the RPC, not the individual record.
 
 **Future work:** A bidirectional-streaming `ProduceStream` RPC, where the client keeps one open stream per (producer, partition) pair, would eliminate repeated connection setup and allow the server to pipeline multiple Raft proposals. The proto definition would be `rpc ProduceStream(stream ProduceRequest) returns (stream ProduceResponse)`. Client library support (stream lifecycle, retry on leader change) is non-trivial.
 
@@ -465,7 +465,7 @@ With unary produce, a client sending one batch per 5 ms (200 batches/s) would pa
 
 Long-poll unary achieves the same latency as server-streaming for steady-state consumption (wake up within one newDataCh notification, ~microseconds after the batch commits). The difference is connection reuse overhead: with unary, each `Fetch` call establishes a new HTTP/2 stream on an existing connection (cheap in gRPC's H2 multiplexing).
 
-**Future work:** `rpc FetchStream(FetchRequest) returns (stream FetchResponse)` - server sends batches as they become available. The server-side logic would select on `newDataCh` in a loop and stream back each new batch. Client receives until the stream is terminated by a leader change (at which point it reconnects to the new leader).
+**Future work:** `rpc FetchStream(FetchRequest) returns (stream FetchResponse)` — server sends batches as they become available. The server-side logic would select on `newDataCh` in a loop and stream back each new batch. Client receives until the stream is terminated by a leader change (at which point it reconnects to the new leader).
 
 ---
 
@@ -577,7 +577,7 @@ grpc.NewServer(
 
 ### Interceptor responsibilities
 
-**Auth interceptor** - outermost. Validates `bunnymq-auth-token`. Returns `UNAUTHENTICATED` immediately if invalid; does not call the next interceptor. This prevents logging and metric recording for unauthenticated noise, though auth failures are logged by the auth interceptor itself at `warn` level (for security audit).
+**Auth interceptor** — outermost. Validates `bunnymq-auth-token`. Returns `UNAUTHENTICATED` immediately if invalid; does not call the next interceptor. This prevents logging and metric recording for unauthenticated noise, though auth failures are logged by the auth interceptor itself at `warn` level (for security audit).
 
 **Logging interceptor.** Logs the RPC at `debug` level on entry; logs the result (status code, latency) at `info` level on exit. Extracts `request_id` from incoming metadata (if present) and attaches it to the logger for the duration of the call.
 
@@ -593,22 +593,22 @@ The `batch_data` field in `ProduceRequest` and the `records` field in `FetchResp
 
 ```text
 Batch (identical on disk and on wire):
-  base_offset    : int64   - client sets 0; server overwrites before storage
-  batch_length   : int32   - total byte length including header (38 bytes)
+  base_offset    : int64   — client sets 0; server overwrites before storage
+  batch_length   : int32   — total byte length including header (38 bytes)
   record_count   : int32
-  crc32          : uint32  - CRC-32C over records[] (bytes [38, batch_length))
-  attributes     : int16   - reserved; must be 0 in v1
-  base_timestamp : int64   - ms since Unix epoch; timestamp of first record
-  max_timestamp  : int64   - ms since Unix epoch; timestamp of last record
+  crc32          : uint32  — CRC-32C over records[] (bytes [38, batch_length))
+  attributes     : int16   — reserved; must be 0 in v1
+  base_timestamp : int64   — ms since Unix epoch; timestamp of first record
+  max_timestamp  : int64   — ms since Unix epoch; timestamp of last record
   records[]      : variable-length; one or more Record values
 
 Record:
-  length         : varint  - byte length of remaining record fields
-  attributes     : int8    - reserved; 0 in v1
-  timestamp_delta: varint  - record.timestamp_ms - base_timestamp
-  offset_delta   : varint  - record.offset - base_offset
-  key_length     : varint  - -1 if key is nil
-  key            : bytes   - absent when key_length == -1
+  length         : varint  — byte length of remaining record fields
+  attributes     : int8    — reserved; 0 in v1
+  timestamp_delta: varint  — record.timestamp_ms - base_timestamp
+  offset_delta   : varint  — record.offset - base_offset
+  key_length     : varint  — -1 if key is nil
+  key            : bytes   — absent when key_length == -1
   value_length   : varint
   value          : bytes
   headers_count  : varint
@@ -647,10 +647,10 @@ No breaking changes are expected within v1. A future `bunnymq.v2` package would 
 
 2. **`FetchResponse.next_offset` on empty response.** When `records` is empty (timeout or no data), `next_offset` is set to the originally requested `offset` (unchanged). This lets the client simply re-use the same offset for the next `Fetch` without tracking state. Confirm this is the intended behaviour vs. returning `0` (ambiguous) or including it in the `FetchResponse.records` field description.
 
-3. **`GetOffsetsResponse` for `BY_TIMESTAMP` - batch base_offset vs. individual record offset.** The current spec returns the `base_offset` of the first matching batch. If the matching record is not the first in the batch, the consumer would re-read records before the target timestamp. Confirm whether Kafka-compatible semantics (return the offset of the first record at or after the timestamp within the matching batch) are required. If so, the server must partially decode the batch to compute this. See Open Question 4 in [05-data-coordinator.md](./05-data-coordinator.md).
+3. **`GetOffsetsResponse` for `BY_TIMESTAMP` — batch base_offset vs. individual record offset.** The current spec returns the `base_offset` of the first matching batch. If the matching record is not the first in the batch, the consumer would re-read records before the target timestamp. Confirm whether Kafka-compatible semantics (return the offset of the first record at or after the timestamp within the matching batch) are required. If so, the server must partially decode the batch to compute this. See Open Question 4 in [05-data-coordinator.md](./05-data-coordinator.md).
 
 4. **Server-side partition selection for `partition_id = -1`.** When `ProduceRequest.partition_id = -1`, the server selects a partition by round-robin. This requires a `LookupMetadata(QueryGetTopic)` call to get the partition count, then a per-topic round-robin counter maintained in the DataCoordinator. Confirm: (a) round-robin state per topic is maintained in DataCoordinator; (b) the counter is not persisted (resets on restart, acceptable for load balancing). Key-hash-based selection is not performed server-side since the key is embedded inside `batch_data` (requiring batch decoding).
 
 5. **`request_id` propagation.** The logging interceptor is specified to extract `request_id` from incoming metadata. Confirm the metadata key name (proposed: `x-request-id`, following common HTTP convention). Clients that set this field enable end-to-end request tracing in logs.
 
-6. **VERIFY - `google.rpc.Status` compatibility.** The `BunnyErrorDetail` and `NotLeaderDetail` messages are embedded in `google.rpc.Status.details` (a `repeated google.protobuf.Any`). Verify that the generated Go code from `google.golang.org/grpc/status` and `google.golang.org/genproto/googleapis/rpc/status` correctly packs/unpacks these custom message types via `status.WithDetails()` and `status.Details()`. No functional concern is expected; this is a build-dependency verification.
+6. **VERIFY — `google.rpc.Status` compatibility.** The `BunnyErrorDetail` and `NotLeaderDetail` messages are embedded in `google.rpc.Status.details` (a `repeated google.protobuf.Any`). Verify that the generated Go code from `google.golang.org/grpc/status` and `google.golang.org/genproto/googleapis/rpc/status` correctly packs/unpacks these custom message types via `status.WithDetails()` and `status.Details()`. No functional concern is expected; this is a build-dependency verification.

@@ -1,4 +1,4 @@
-# Sequence: Consumer Fetch - Long-Poll (waiting for new records)
+# Sequence: Consumer Fetch — Long-Poll (waiting for new records)
 
 Fetch request where no records are available at the requested offset and `maxWaitMs > 0`. The goroutine parks until a producer writes new data, the timeout fires, the leader changes, or the client disconnects.
 
@@ -6,7 +6,7 @@ Fetch request where no records are available at the requested offset and `maxWai
 sequenceDiagram
     participant C as Consumer (client)
     participant DAPI as DataAPI
-    participant DC as DataCoordinator<br/>(this node - leader)
+    participant DC as DataCoordinator<br/>(this node — leader)
     participant RH as RaftHost
     participant PFSM as PartitionFSM
     participant STR as Storage
@@ -24,20 +24,20 @@ sequenceDiagram
     Note over DC: Begin long-poll loop.<br/>Deadline = now + 5000ms.
 
     loop until data / timeout / leader change / ctx cancel
-        Note over DC: Step 1 - Snapshot newDataCh BEFORE reading<br/>(eliminates race where data arrives between<br/>the failed read and channel snapshot)
+        Note over DC: Step 1 — Snapshot newDataCh BEFORE reading<br/>(eliminates race where data arrives between<br/>the failed read and channel snapshot)
 
         DC->>+RH: LookupPartition(QueryGetNewDataCh, shardID)
         RH->>+PFSM: Lookup(QueryGetNewDataCh)
-        PFSM->>STR: NewDataCh() - acquire chanMu, return current ch
+        PFSM->>STR: NewDataCh() — acquire chanMu, return current ch
         STR-->>PFSM: ch (chan struct{})
         PFSM-->>-RH: ch as interface{}
         RH-->>-DC: ch
 
-        Note over DC: Step 2 - Re-verify leadership<br/>(leader may have changed since RPC arrived)
+        Note over DC: Step 2 — Re-verify leadership<br/>(leader may have changed since RPC arrived)
         DC->>RH: LookupMetadata(QueryGetPartition)
         RH-->>DC: LeaderNodeID == this node ✓
 
-        Note over DC: Step 3 - Attempt read
+        Note over DC: Step 3 — Attempt read
         DC->>+RH: LookupPartition(QueryRead, offset=200, maxBytes=1MiB)
         RH->>+PFSM: Lookup(QueryRead{200, 1MiB})
         PFSM->>+STR: Read(200, 1MiB)
@@ -46,14 +46,14 @@ sequenceDiagram
         PFSM-->>-RH: ReadResult{Records:nil}
         RH-->>-DC: ReadResult{nil}
 
-        Note over DC: Step 4 - Park on channel / timeout / ctx
+        Note over DC: Step 4 — Park on channel / timeout / ctx
 
         DC->>DC: select { case <-ch:... case <-time.After(remaining):... case <-ctx.Done():... }
 
         Note over DC,P: === Producer writes a new batch (separate flow) ===
 
         P->>RHp: SyncProposePartition(CmdAppendBatch)
-        RHp->>PFSMw: Update([entry]) - quorum committed
+        RHp->>PFSMw: Update([entry]) — quorum committed
         PFSMw->>STR: Append(batch) → base_offset=200, record_count=10
         Note over STR: Writes batch to .log segment.<br/>Closes current newDataCh (ch from above).<br/>Replaces with new channel.<br/>LatestOffset is now 210.
         STR-->>PFSMw: 200
@@ -110,7 +110,7 @@ sequenceDiagram
     Note over DC: On next loop iteration,<br/>leaderCheck re-reads metadata.
 
     DC->>RH: LookupMetadata(QueryGetPartition)
-    Note over RH: AssignPartitionLeader has committed<br/>- new leader elected.
+    Note over RH: AssignPartitionLeader has committed<br/>— new leader elected.
     RH-->>DC: LeaderNodeID = other_node
 
     DC-->>C: FetchResponse (FAILED_PRECONDITION)<br/>NotLeader{other_node, "addr:port"}
@@ -123,14 +123,14 @@ sequenceDiagram
 ## Race elimination: why channel snapshot comes before Read
 
 ```text
-Timeline (wrong order - channel snapshot AFTER read):
+Timeline (wrong order — channel snapshot AFTER read):
 
   t0: Read(200) → empty (LatestOffset=200)
   t1: [Producer] Append(batch) → LatestOffset=210, closes OLD_ch, creates NEW_ch
   t2: NewDataCh() → returns NEW_ch  ← wrong: we missed the notification
   t3: select on NEW_ch → blocks until NEXT append, missing offset 200..209
 
-Timeline (correct order - channel snapshot BEFORE read):
+Timeline (correct order — channel snapshot BEFORE read):
 
   t0: NewDataCh() → returns OLD_ch
   t1: [Producer] Append(batch) → LatestOffset=210, closes OLD_ch, creates NEW_ch

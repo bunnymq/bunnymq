@@ -1,4 +1,4 @@
-# BunnyMQ - Requirements Specification
+# BunnyMQ — Requirements Specification
 
 This document defines the functional and non-functional requirements for BunnyMQ. It is the source of truth for what the system does. In case of conflict between this document and any design document, this document wins. Designers must update this document explicitly to reflect any agreed change of scope.
 
@@ -8,18 +8,18 @@ BunnyMQ is a Kafka-like distributed message broker written in Go. It supports to
 
 ## 2. Glossary
 
-- **Topic** - a logical message stream identified by a unique name.
-- **Partition** - an independent ordered subset of a topic's messages, identified by `(topic, partition_id)`. Order is preserved within a partition only.
-- **Offset** - a monotonically increasing 64-bit integer identifying a message's position within a partition.
-- **Producer** - a client that sends messages to topics.
-- **Consumer** - a client that reads messages from topics.
-- **Consumer Group** - a set of consumers cooperatively consuming a set of partitions, where each partition is read by exactly one consumer in the group.
-- **Broker / Node** - a single BunnyMQ server process. A cluster has multiple nodes.
-- **Shard** - a Raft replication group as defined by dragonboat. One shard exists per partition, plus one shard for cluster metadata.
-- **Replica** - a copy of a partition on a specific node, participating in the partition's Raft shard.
-- **Leader** - the current Raft leader of a shard. Reads and writes for that shard go through the leader.
-- **Committed offset (consumer)** - the last offset within a partition that a consumer group has acknowledged as processed.
-- **Committed index (Raft)** - the last log index acknowledged by quorum of a Raft shard. Records up to this index are durable and visible.
+- **Topic** — a logical message stream identified by a unique name.
+- **Partition** — an independent ordered subset of a topic's messages, identified by `(topic, partition_id)`. Order is preserved within a partition only.
+- **Offset** — a monotonically increasing 64-bit integer identifying a message's position within a partition.
+- **Producer** — a client that sends messages to topics.
+- **Consumer** — a client that reads messages from topics.
+- **Consumer Group** — a set of consumers cooperatively consuming a set of partitions, where each partition is read by exactly one consumer in the group.
+- **Broker / Node** — a single BunnyMQ server process. A cluster has multiple nodes.
+- **Shard** — a Raft replication group as defined by dragonboat. One shard exists per partition, plus one shard for cluster metadata.
+- **Replica** — a copy of a partition on a specific node, participating in the partition's Raft shard.
+- **Leader** — the current Raft leader of a shard. Reads and writes for that shard go through the leader.
+- **Committed offset (consumer)** — the last offset within a partition that a consumer group has acknowledged as processed.
+- **Committed index (Raft)** — the last log index acknowledged by quorum of a Raft shard. Records up to this index are durable and visible.
 
 ## 3. Functional requirements
 
@@ -29,8 +29,8 @@ BunnyMQ is a Kafka-like distributed message broker written in Go. It supports to
 - **3.1.2 Delete topic.** Inputs: `name`. Outputs: success/failure. Asynchronous physical deletion is acceptable.
 - **3.1.3 List topics.** Outputs: list of `(name, partition_count, replication_factor)`.
 - **3.1.4 Describe topic.** Inputs: `name`. Outputs: full topic metadata including per-partition leader and replica node IDs.
-- **3.1.5 Alter topic - increase partition count.** Inputs: `name`, `new_partition_count` (must be >= current). Outputs: success/failure. Decreasing partition count is **not supported**.
-- **3.1.6 Alter topic - change retention config.** Inputs: `name`, new `retention_ms` and/or `retention_bytes`. Outputs: success/failure. New retention settings take effect on the next retention enforcement cycle.
+- **3.1.5 Alter topic — increase partition count.** Inputs: `name`, `new_partition_count` (must be >= current). Outputs: success/failure. Decreasing partition count is **not supported**.
+- **3.1.6 Alter topic — change retention config.** Inputs: `name`, new `retention_ms` and/or `retention_bytes`. Outputs: success/failure. New retention settings take effect on the next retention enforcement cycle.
 
 ### 3.2 Cluster management (Admin API)
 
@@ -40,7 +40,7 @@ BunnyMQ is a Kafka-like distributed message broker written in Go. It supports to
 
 ### 3.3 Producer API (Data API)
 
-- **3.3.1 Produce.** Inputs: `topic`, optional `partition_id` (if absent, choose by key hash or round-robin), optional `key` (bytes), `value` (bytes), optional `headers` (map<string, bytes>), `acks` (one of `0`, `all`). Outputs: on success - `partition_id`, assigned `offset`. On error - error code + description.
+- **3.3.1 Produce.** Inputs: `topic`, optional `partition_id` (if absent, choose by key hash or round-robin), optional `key` (bytes), `value` (bytes), optional `headers` (map<string, bytes>), `acks` (one of `0`, `all`). Outputs: on success — `partition_id`, assigned `offset`. On error — error code + description.
 - **3.3.2 Batched produce.** Producers may send a batch of records in a single request. Records in the batch are guaranteed to land in the same partition with consecutive offsets, atomically (all or none).
 
 ### 3.4 Consumer API (Data API)

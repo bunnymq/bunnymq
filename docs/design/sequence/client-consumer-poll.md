@@ -67,14 +67,14 @@ sequenceDiagram
             C->>C: Decode batches from records bytes.<br/>fetchPositions[tp] = 145.<br/>Append to pendingRecords.
         else no records yet (long-poll wait expired)
             DS-->>C: FetchResponse{records=nil, next_offset=0}
-            Note over C: Empty response - no records in window.<br/>Keep fetchPositions[tp] unchanged.<br/>Move to next partition.
+            Note over C: Empty response — no records in window.<br/>Keep fetchPositions[tp] unchanged.<br/>Move to next partition.
         end
     end
 
     Note over C: Check rebalanceCh from heartbeatLoop.
     alt rebalanceCh has signal
         C->>C: Pause poll. Drain pendingRecords to caller first.
-        Note over C: Rebalance handling - see Rebalance flow below.
+        Note over C: Rebalance handling — see Rebalance flow below.
     end
 
     C-->>-App: []Record (from pendingRecords)
@@ -126,7 +126,7 @@ sequenceDiagram
 
     Note over HB: heartbeatLoop is notified of new generationID<br/>via channel. Starts heartbeating with generation_id=6.
 
-    C-->>-App: []Record (empty or partial - records from before rebalance)
+    C-->>-App: []Record (empty or partial — records from before rebalance)
 
     Note over App: Application calls Poll again.<br/>New assignment is orders/0,1 and payments/0<br/>(lost orders/2 to the new member).
 ```
@@ -149,7 +149,7 @@ sequenceDiagram
     HB->>+GC: DataService.CommitOffset(CommitOffsetRequest{<br/>group_id, member_id, generation_id=6,<br/>offsets={orders/0→145, payments/0→1}})
     GC-->>-HB: CommitOffsetResponse{ok}
 
-    Note over HB: If response is STALE_GENERATION or NOT_GROUP_MEMBER,<br/>heartbeatLoop signals rebalanceCh - Poll will re-join.
+    Note over HB: If response is STALE_GENERATION or NOT_GROUP_MEMBER,<br/>heartbeatLoop signals rebalanceCh — Poll will re-join.
 ```
 
 ---

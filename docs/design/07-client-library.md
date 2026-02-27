@@ -1,4 +1,4 @@
-# Client Library - Detailed Design
+# Client Library — Detailed Design
 
 The client library (`pkg/client`) provides the public Go API for interacting with a BunnyMQ cluster: a `Producer` for sending message batches, a `Consumer` for polling and committing offsets, and an `AdminClient` for topic and cluster management. Each type wraps a pool of gRPC connections, handles leader discovery and caching, and implements retry logic for transient errors. Internal helpers (batch encoding/decoding, connection pool, metadata cache) live in `internal/client` and are not part of the public API. No broker-side logic lives here: the library is a pure client.
 
@@ -10,18 +10,18 @@ See [06-api-protocol.md](./06-api-protocol.md) for the gRPC service definitions 
 
 ```text
 pkg/client/
-├── producer.go         - Producer, ProducerConfig, NewProducer
-├── consumer.go         - Consumer, ConsumerConfig, NewConsumer
-├── admin.go            - AdminClient, NewAdminClient
-├── record.go           - Record type (decoded message), TP (TopicPartition alias)
-└── config.go           - Config (common fields shared by all three client types)
+├── producer.go         — Producer, ProducerConfig, NewProducer
+├── consumer.go         — Consumer, ConsumerConfig, NewConsumer
+├── admin.go            — AdminClient, NewAdminClient
+├── record.go           — Record type (decoded message), TP (TopicPartition alias)
+└── config.go           — Config (common fields shared by all three client types)
 
 internal/client/
-├── connpool.go         - gRPC connection pool (one conn per broker address)
-├── metacache.go        - topic metadata cache (partition count, per-partition leader)
-├── batch_encoder.go    - encode []Record → batch_data bytes (REQUIREMENTS.md §4.4)
-├── batch_decoder.go    - decode batch_data bytes → []Record
-└── retry.go            - retry loop with exponential backoff
+├── connpool.go         — gRPC connection pool (one conn per broker address)
+├── metacache.go        — topic metadata cache (partition count, per-partition leader)
+├── batch_encoder.go    — encode []Record → batch_data bytes (REQUIREMENTS.md §4.4)
+├── batch_decoder.go    — decode batch_data bytes → []Record
+└── retry.go            — retry loop with exponential backoff
 ```
 
 All types in `pkg/client` are safe for concurrent use by multiple goroutines unless stated otherwise. `internal/client` types are not exported.
@@ -245,7 +245,7 @@ func (p *Producer) Send(
 // SendBatch produces a pre-encoded batch to a specific partition.
 // The caller is responsible for encoding the batch in the on-wire format
 // (REQUIREMENTS.md §4.4). The base_offset field in the batch header is
-// ignored - Storage assigns it. Returns the assigned base_offset, or -1
+// ignored — Storage assigns it. Returns the assigned base_offset, or -1
 // for AcksZero.
 func (p *Producer) SendBatch(
     ctx context.Context,
@@ -555,7 +555,7 @@ func (c *Consumer) heartbeatLoop() {
 
 The heartbeat goroutine is the sole writer to `lastHeartbeatSent`. It does not read or modify `fetchOffsets`; those are owned by the Poll goroutine. The only shared state between the heartbeat goroutine and the Poll goroutine is `rebalanceCh` (channel; safe) and `uncommittedOffsets` (protected by a mutex, accessed by both auto-commit and Poll).
 
-#### Poll - rebalance handling
+#### Poll — rebalance handling
 
 ```go
 func (c *Consumer) Poll(ctx context.Context, maxWaitMs int64) ([]Record, error) {
@@ -672,7 +672,7 @@ func (a *AdminClient) Close() error
 | Goroutine | Shared state | Protection |
 |---|---|---|
 | Caller goroutines (N concurrent `Send` calls) | `MetaCache`, `ConnPool`, `roundRobinCounter` | `MetaCache` uses its own `RWMutex`; `ConnPool` uses its own `RWMutex`; counter is `atomic.Int64` |
-| No background goroutines | - | - |
+| No background goroutines | — | — |
 
 Multiple goroutines may call `Send` concurrently. Each call is independent: it reads from the metadata cache (shared), selects a partition (atomic increment), encodes a batch (local), and sends one gRPC RPC (gRPC stubs are safe for concurrent use).
 
@@ -721,7 +721,7 @@ Goroutine-safe. Each method makes one gRPC call independently.
 
 1. **Metadata fetch: two-RPC round-trip.** Populating the leader cache requires `DescribeTopic` (partition metadata including `LeaderNodeID`) followed by resolving `LeaderNodeID → Data API address` (requiring `DescribeCluster` or a node-address lookup). To reduce this to one RPC, consider extending `DescribeTopicResponse.PartitionInfo` to include `leader_address string` directly. This is an API change deferred to the API Protocol design (Module 3 Open Question) but has impact on how the client library is implemented.
 
-2. **Group coordinator discovery.** `JoinGroup` must be sent to the metadata shard leader (which acts as the group coordinator in v1). The client discovers this address via `DescribeCluster` on any bootstrap server and then sending `JoinGroup` - the server returns `NotLeader` if it is not the metadata shard leader. The client then retries against the `NotLeaderDetail.leader_address`. Confirm this is the correct discovery path, or whether `DescribeCluster` should expose a `coordinator_address` field explicitly.
+2. **Group coordinator discovery.** `JoinGroup` must be sent to the metadata shard leader (which acts as the group coordinator in v1). The client discovers this address via `DescribeCluster` on any bootstrap server and then sending `JoinGroup` — the server returns `NotLeader` if it is not the metadata shard leader. The client then retries against the `NotLeaderDetail.leader_address`. Confirm this is the correct discovery path, or whether `DescribeCluster` should expose a `coordinator_address` field explicitly.
 
 3. **`Poll` for manual consumers with multiple partitions.** The current design is sequential: fetch from each sought partition in order. For a manual consumer with many partitions, this may be slow. An alternative: fan-out goroutines per partition, collect results within the poll budget. Recommend keeping sequential for v1 (simpler, no goroutine pool overhead); fan-out as optional optimisation.
 

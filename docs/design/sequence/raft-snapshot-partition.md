@@ -1,6 +1,6 @@
 # raft-snapshot-partition: Partition FSM Snapshot Strategy
 
-The Partition FSM implements Strategy A (no-op snapshots) for v1. When dragonboat requests a snapshot, the FSM writes a trivial marker byte and returns. Recovery from a snapshot is also a no-op - the marker is consumed and discarded. With Strategy A, dragonboat's Raft log for each partition shard is never compacted (or compacted very lazily), meaning a fresh replica must replay the entire Raft log to catch up. This is acceptable for the course-project scope. Strategy B (segment manifest snapshot) is documented as an appendix and is the production path.
+The Partition FSM implements Strategy A (no-op snapshots) for v1. When dragonboat requests a snapshot, the FSM writes a trivial marker byte and returns. Recovery from a snapshot is also a no-op — the marker is consumed and discarded. With Strategy A, dragonboat's Raft log for each partition shard is never compacted (or compacted very lazily), meaning a fresh replica must replay the entire Raft log to catch up. This is acceptable for the course-project scope. Strategy B (segment manifest snapshot) is documented as an appendix and is the production path.
 
 ```mermaid
 sequenceDiagram
@@ -20,7 +20,7 @@ sequenceDiagram
     SW-->>FSM: 15 bytes written
     FSM-->>DB: nil
 
-    Note over DB: Snapshot "installed" - trivial payload, no state transferred
+    Note over DB: Snapshot "installed" — trivial payload, no state transferred
 ```
 
 ## Strategy A: Recovery from Snapshot
@@ -58,8 +58,8 @@ sequenceDiagram
 | Implementation complexity | Trivial |
 | Raft log size | Ever-growing (never compacted) |
 | Fresh replica bootstrap | Replay entire Raft log from index 0 |
-| Data durability | Unaffected - Storage log is independent |
-| Storage retention | Segments deleted by retention even if Raft log still references them - if a replica replays a deleted entry, `Storage.Append` re-writes it from the Raft log payload |
+| Data durability | Unaffected — Storage log is independent |
+| Storage retention | Segments deleted by retention even if Raft log still references them — if a replica replays a deleted entry, `Storage.Append` re-writes it from the Raft log payload |
 
 ---
 

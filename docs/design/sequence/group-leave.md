@@ -1,4 +1,4 @@
-# Sequence: Consumer Group - LeaveGroup
+# Sequence: Consumer Group — LeaveGroup
 
 Voluntary member departure. The coordinator removes the member, recomputes the assignment, and bumps the generation ID. Remaining members learn of the change on their next heartbeat.
 
@@ -32,7 +32,7 @@ sequenceDiagram
 
     GC->>+RH: SyncProposeMetadata(LeaveConsumerGroupCmd{<br/>group_id="shipping-svc",<br/>member_id="m-uuid-1",<br/>reason=Voluntary,<br/>new_assignment={"m-uuid-2": [orders/0..7, payments/0..3]},<br/>new_generation_id=3})
 
-    RH->>MFSM: Update([LeaveConsumerGroupCmd]) - quorum committed
+    RH->>MFSM: Update([LeaveConsumerGroupCmd]) — quorum committed
     Note over MFSM: Remove m-uuid-1 from Members.<br/>Replace Assignments with new_assignment.<br/>GenerationID = 3.
     MFSM-->>RH: ok
     RH-->>-GC: ok
@@ -80,7 +80,7 @@ sequenceDiagram
     GC-->>-DAPI: NOT_GROUP_MEMBER
     DAPI-->>-C: status=FAILED_PRECONDITION<br/>BunnyErrorDetail{code=NOT_GROUP_MEMBER}
 
-    Note over C: The client ignores the error during Close()<br/>- it is already not in the group.
+    Note over C: The client ignores the error during Close()<br/>— it is already not in the group.
 ```
 
 ---
@@ -123,5 +123,5 @@ sequenceDiagram
 
 - **Group is not deleted when the last member leaves.** The `GroupState` (with its committed offsets) remains in the FSM. This matches Kafka semantics: committed offsets survive until the group is explicitly deleted (not implemented in v1) or the FSM is wiped.
 - **Assignment computed in coordinator, not FSM.** The `LeaveConsumerGroupCmd` carries the pre-computed `new_assignment` payload. The FSM applies it as-is; it does not re-run the assignment algorithm. This keeps the FSM `Update` method strictly deterministic (all inputs are in the command).
-- **Consumer.Close() behaviour.** The client library calls `LeaveGroup` before closing connections. If the RPC fails (coordinator unreachable), the client still closes - the session timeout sweep will eventually evict the member. The application should handle this gracefully.
-- **Concurrent leave + join.** If C1 leaves and C3 joins at the same time, both propose independently. The resulting generation depends on the Raft commit order. The final assignment is consistent because each committer uses the pre-propose group state to compute the assignment - the later committer must re-read FSM state after commit to produce the correct response. See the concurrent join note in [group-join.md](./group-join.md).
+- **Consumer.Close() behaviour.** The client library calls `LeaveGroup` before closing connections. If the RPC fails (coordinator unreachable), the client still closes — the session timeout sweep will eventually evict the member. The application should handle this gracefully.
+- **Concurrent leave + join.** If C1 leaves and C3 joins at the same time, both propose independently. The resulting generation depends on the Raft commit order. The final assignment is consistent because each committer uses the pre-propose group state to compute the assignment — the later committer must re-read FSM state after commit to produce the correct response. See the concurrent join note in [group-join.md](./group-join.md).

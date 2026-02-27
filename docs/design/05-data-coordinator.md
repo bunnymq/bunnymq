@@ -1,6 +1,6 @@
-# Data Coordinator - Detailed Design
+# Data Coordinator — Detailed Design
 
-The Data Coordinator is the data-plane routing layer on each broker node. It receives produce and fetch requests from the Data API, looks up the partition leader from the Metadata FSM, and either handles the request locally (if this node is the current leader) or returns a `NotLeader` error so the client can retry against the correct node. For produce, it dispatches `SyncProposePartition` (acks=all) or `ProposePartition` (acks=0) through the Raft host. For fetch, it calls `LookupPartition` against the local Partition FSM - no Raft round-trip - and implements long-polling via the storage `newDataCh` notification channel. The Data Coordinator does not forward requests to other nodes in v1; client-side retry is the routing mechanism.
+The Data Coordinator is the data-plane routing layer on each broker node. It receives produce and fetch requests from the Data API, looks up the partition leader from the Metadata FSM, and either handles the request locally (if this node is the current leader) or returns a `NotLeader` error so the client can retry against the correct node. For produce, it dispatches `SyncProposePartition` (acks=all) or `ProposePartition` (acks=0) through the Raft host. For fetch, it calls `LookupPartition` against the local Partition FSM — no Raft round-trip — and implements long-polling via the storage `newDataCh` notification channel. The Data Coordinator does not forward requests to other nodes in v1; client-side retry is the routing mechanism.
 
 See [01-modules.md §5](./01-modules.md) for the fetch long-polling design, [02-storage.md §8](./02-storage.md) for storage concurrency, [03-raft-fsm.md §4](./03-raft-fsm.md) for the Partition FSM interface, and [04-cluster-coordinator.md](./04-cluster-coordinator.md) for the shard lifecycle that feeds this module's registry.
 
@@ -12,7 +12,7 @@ See [01-modules.md §5](./01-modules.md) for the fetch long-polling design, [02-
 
 - **Produce routing.** Look up the partition leader; issue `SyncProposePartition` (acks=all) or `ProposePartition` (acks=0) if this node is the leader; return `NotLeader` otherwise.
 - **Fetch routing.** Look up the partition leader; call `LookupPartition` for a zero-round-trip read from local storage; implement long-polling when no records are currently available.
-- **Offset queries.** `GetEarliestOffset`, `GetLatestOffset`, `GetOffsetByTimestamp` - all via `LookupPartition` from the local leader.
+- **Offset queries.** `GetEarliestOffset`, `GetLatestOffset`, `GetOffsetByTimestamp` — all via `LookupPartition` from the local leader.
 - **Shard registry.** Maintain a local map of partition shards available for routing on this node, updated by the Cluster Coordinator via `StartPartitionReplica` and `StopPartitionReplica`.
 
 ### What the Data Coordinator does NOT do
@@ -34,11 +34,11 @@ type DataCoordinator struct { /* unexported */ }
 
 // Produce appends batch to the partition identified by (topic, partitionID).
 // batch must be a fully-encoded batch in the on-disk/on-wire format
-// (REQUIREMENTS.md §4.4); the base_offset field is ignored - Storage overwrites
+// (REQUIREMENTS.md §4.4); the base_offset field is ignored — Storage overwrites
 // it with the server-assigned offset.
 //
-// acks=AcksAll  - blocks until quorum commit; returns the assigned base_offset.
-// acks=AcksZero - fires and forgets; returns offset -1 (REQUIREMENTS.md §3.6.1).
+// acks=AcksAll  — blocks until quorum commit; returns the assigned base_offset.
+// acks=AcksZero — fires and forgets; returns offset -1 (REQUIREMENTS.md §3.6.1).
 //
 // Returns NotLeader if this node is not the current leader, including the
 // leader's node ID and address so the caller can retry. Returns TopicNotFound
@@ -184,7 +184,7 @@ func (dc *DataCoordinator) leaderCheck(
 }
 ```
 
-`LookupMetadata` calls dragonboat's `ReadLocalNode` on the metadata shard - no Raft round-trip. The `LeaderNodeID` it reads reflects the most recent `AssignPartitionLeader` command committed to the metadata shard by the Cluster Coordinator's leader sweep. The maximum staleness is `leader_check_interval_ms` (default 3 s). Clients that hit a stale `NotLeader` response simply retry and receive a fresh leader reference.
+`LookupMetadata` calls dragonboat's `ReadLocalNode` on the metadata shard — no Raft round-trip. The `LeaderNodeID` it reads reflects the most recent `AssignPartitionLeader` command committed to the metadata shard by the Cluster Coordinator's leader sweep. The maximum staleness is `leader_check_interval_ms` (default 3 s). Clients that hit a stale `NotLeader` response simply retry and receive a fresh leader reference.
 
 `nodeAddress` caches `(nodeID → Data API address)` with a short TTL (default 5 s) to avoid a Metadata FSM lookup on every non-leader request.
 
@@ -237,10 +237,10 @@ if err := dc.raftHost.ProposePartition(ctx, shardID, PartitionCommand{
     return -1, mapRaftError(err)
 }
 
-return -1, nil // no offset assigned - REQUIREMENTS.md §3.6.1
+return -1, nil // no offset assigned — REQUIREMENTS.md §3.6.1
 ```
 
-`ProposePartition` enqueues the entry in dragonboat's propose pipeline and returns immediately without waiting for replication or FSM application. The client receives `offset = -1`. If the leader crashes before the entry achieves quorum, the batch is silently lost - this is the defined semantics of `acks=0`.
+`ProposePartition` enqueues the entry in dragonboat's propose pipeline and returns immediately without waiting for replication or FSM application. The client receives `offset = -1`. If the leader crashes before the entry achieves quorum, the batch is silently lost — this is the defined semantics of `acks=0`.
 
 ---
 
@@ -297,7 +297,7 @@ func (dc *DataCoordinator) fetchWithLongPoll(
         }
         ch := chResult.(<-chan struct{})
 
-        // Re-verify leadership on each iteration - leader may change during a long poll.
+        // Re-verify leadership on each iteration — leader may change during a long poll.
         pm, err := dc.raftHost.LookupMetadata(ctx, MetadataQuery{
             Type: QueryGetPartition, TopicName: topic, PartitionID: partitionID,
         })
@@ -324,7 +324,7 @@ func (dc *DataCoordinator) fetchWithLongPoll(
             return r.Records, r.NextOffset, nil
         }
 
-        // No data yet - wait.
+        // No data yet — wait.
         select {
         case <-ch:
             // newDataCh closed by Storage.Append on a new record. Loop again.
@@ -364,7 +364,7 @@ Storage manages its own retention lifecycle internally. `Storage.Open()` starts 
 
 **Retention runs independently on each replica.** All replicas hold identical data (Raft guarantees identical Apply sequences), so they delete the same segments within one `retention_check_interval_ms` window of each other. Minor temporary divergence between replicas is acceptable: a consumer that hits `OffsetOutOfRange` from one replica will encounter the same error on others shortly after.
 
-> **Alternative: leader-driven Raft-commanded retention.** For strictly deterministic cross-replica deletion, the leader could call `EnforceRetention`, translate the result into a `DeleteSegmentsBefore(earliestValidOffset int64)` Partition FSM command, and have followers apply it at the same Raft index. This requires a new command type (`0x03`) in [03-raft-fsm.md §4.2](./03-raft-fsm.md) and a `DeleteSegmentsBefore(offset int64) error` Storage method - both in immutable documents. The decision is deferred to Open Question 3.
+> **Alternative: leader-driven Raft-commanded retention.** For strictly deterministic cross-replica deletion, the leader could call `EnforceRetention`, translate the result into a `DeleteSegmentsBefore(earliestValidOffset int64)` Partition FSM command, and have followers apply it at the same Raft index. This requires a new command type (`0x03`) in [03-raft-fsm.md §4.2](./03-raft-fsm.md) and a `DeleteSegmentsBefore(offset int64) error` Storage method — both in immutable documents. The decision is deferred to Open Question 3.
 
 ---
 
@@ -398,7 +398,7 @@ VERIFY: confirm that dragonboat's `IOnDiskStateMachine` allows `Lookup()` and `U
 | Metadata shard has no leader | `LookupMetadata` returns error. Coordinator returns `Unavailable`. |
 | Shard not in local registry | `leaderCheck` returns `Unavailable`. Occurs briefly after topic creation before the reconcile goroutine runs. Producer retries after a short back-off. |
 | `SyncProposePartition` timeout | dragonboat returns deadline error. Coordinator returns `Timeout`. Batch not committed; client may safely retry (not yet applied, so no duplicate). |
-| `SyncProposePartition` - no quorum | dragonboat returns error. Coordinator returns `Unavailable`. |
+| `SyncProposePartition` — no quorum | dragonboat returns error. Coordinator returns `Unavailable`. |
 | `ProposePartition` enqueue error (acks=0) | Rare; dragonboat pipeline full or NodeHost closing. Coordinator returns `Unavailable`. |
 | `OffsetOutOfRange` (fetch below EarliestOffset) | `storage.Read` returns `ErrOffsetOutOfRange`. Coordinator returns `OffsetOutOfRange`. Client must call `GetEarliestOffset` and reset its position. |
 | Leader changes during long-poll | Leader re-check inside the poll loop detects the change. Returns `NotLeader`; client reconnects and re-issues Fetch against the new leader. |
@@ -424,4 +424,4 @@ VERIFY: confirm that dragonboat's `IOnDiskStateMachine` allows `Lookup()` and `U
 
 4. **`GetOffsetByTimestamp` return semantics.** `storage.ReadByTime(timestampMs, n)` returns records starting at the first batch whose `max_timestamp >= timestampMs`. The `base_offset` of that batch is the intended return value. Confirm: (a) the semantics match Kafka's `offsetsForTimes` (return the offset of the first message at or after the given timestamp, not the batch base offset); (b) a batch's `base_offset` is acceptable even if only the batch's last record has `timestamp >= timestampMs`, or whether a record-level scan is required.
 
-5. **VERIFY - `ProposePartition` error semantics.** dragonboat's `NodeHost.Propose` returns an error when the pipeline is full or NodeHost is shutting down. Verify the exact error type(s) in dragonboat v4 and confirm the correct client-visible error code (`Unavailable` is proposed as retriable; `Unknown` if the type is unexpected).
+5. **VERIFY — `ProposePartition` error semantics.** dragonboat's `NodeHost.Propose` returns an error when the pipeline is full or NodeHost is shutting down. Verify the exact error type(s) in dragonboat v4 and confirm the correct client-visible error code (`Unavailable` is proposed as retriable; `Unknown` if the type is unexpected).

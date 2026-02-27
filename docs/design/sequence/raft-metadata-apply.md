@@ -25,8 +25,8 @@ sequenceDiagram
     RH->>DB: SyncPropose(ctx, clientSession, cmdBytes)
 
     Note over DB: Leader appends entry to its WAL; sends AppendEntries to followers
-    DB->>FSM_F1: (Raft replication - AppendEntries RPC)
-    DB->>FSM_F2: (Raft replication - AppendEntries RPC)
+    DB->>FSM_F1: (Raft replication — AppendEntries RPC)
+    DB->>FSM_F2: (Raft replication — AppendEntries RPC)
     FSM_F1-->>DB: AppendEntries ACK
     FSM_F2-->>DB: AppendEntries ACK
 
@@ -82,6 +82,6 @@ sequenceDiagram
 ## Edge Cases
 
 - **AlreadyExists:** If the topic already exists when `Update()` runs on the leader, the FSM returns `Result{Value: ErrAlreadyExists}` without modifying state. All replicas return the same result. The Coordinator propagates `AlreadyExists` to the client as per [REQUIREMENTS.md §3.1.1](../REQUIREMENTS.md).
-- **Context timeout:** If `SyncPropose` times out (the node is not the leader or quorum is unavailable), the command is not committed. The Coordinator returns a retriable error to the client. The command bytes may have been sent to dragonboat but not yet committed; they are harmless - uncommitted entries are not applied.
+- **Context timeout:** If `SyncPropose` times out (the node is not the leader or quorum is unavailable), the command is not committed. The Coordinator returns a retriable error to the client. The command bytes may have been sent to dragonboat but not yet committed; they are harmless — uncommitted entries are not applied.
 - **Coordinator crash after SyncPropose returns but before StartPartitionShard:** On restart, the Coordinator reads the metadata FSM via `LookupMetadata` and detects that the topic exists but its partition shards have not been started. It retries `StartPartitionShard` for each missing shard. This is safe because `StartCluster` is idempotent for already-started shards.
 - **Follower apply ordering:** Followers apply `Update()` asynchronously relative to the leader. Reads via `ReadLocalNode` on a follower may transiently see stale state. The Cluster Coordinator always reads from the leader's FSM via `ReadLocalNode` on shard 0 (which dragonboat routes to the local node only if it is the leader or uses stale-read semantics). This is consistent with at-least-once semantics.

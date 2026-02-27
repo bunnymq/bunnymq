@@ -1,4 +1,4 @@
-# BunnyMQ - Module Breakdown
+# BunnyMQ — Module Breakdown
 
 This document describes the Go package layout for BunnyMQ, the responsibility boundary of each module, inter-module dependencies, the control-plane/data-plane split, and the dragonboat integration surface. It is the input for ticket decomposition in Stage 3. See [00-overview.md](./00-overview.md) for architectural decisions and rationale.
 
@@ -8,33 +8,33 @@ This document describes the Go package layout for BunnyMQ, the responsibility bo
 
 ```text
 api/
-  data.proto          - Data API service definition (Produce, Fetch, offset queries, group ops)
-  management.proto    - Management API service definition (topic, cluster admin)
+  data.proto          — Data API service definition (Produce, Fetch, offset queries, group ops)
+  management.proto    — Management API service definition (topic, cluster admin)
 
 cmd/
-  bunnymq/            - broker entrypoint binary
-  bunnymq-cli/        - cobra-based CLI tool (separate binary; not linked into the broker)
+  bunnymq/            — broker entrypoint binary
+  bunnymq-cli/        — cobra-based CLI tool (separate binary; not linked into the broker)
 
 internal/
-  config/             - configuration loading, validation, and typed config structs
-  raft/               - dragonboat NodeHost wrapper and shard lifecycle
-  metadata/           - Metadata FSM (IStateMachine) and read-access layer
-  partition/          - Partition FSM (IOnDiskStateMachine)
-  storage/            - segmented log: Storage, SegmentStorage, LogSegment, indexes
+  config/             — configuration loading, validation, and typed config structs
+  raft/               — dragonboat NodeHost wrapper and shard lifecycle
+  metadata/           — Metadata FSM (IStateMachine) and read-access layer
+  partition/          — Partition FSM (IOnDiskStateMachine)
+  storage/            — segmented log: Storage, SegmentStorage, LogSegment, indexes
   coordinator/
-    cluster/          - Cluster Coordinator: topic/partition lifecycle, node assignment
-    data/             - Data Coordinator: produce/fetch routing, acks enforcement
-    group/            - Group Coordinator: consumer group lifecycle and offset management
+    cluster/          — Cluster Coordinator: topic/partition lifecycle, node assignment
+    data/             — Data Coordinator: produce/fetch routing, acks enforcement
+    group/            — Group Coordinator: consumer group lifecycle and offset management
   api/
-    data/             - Data API gRPC server (produce, fetch, offset queries, group ops)
-    management/       - Management API gRPC server (topic and cluster admin)
-  auth/               - token-based authentication interceptor
-  metrics/            - Prometheus metric registration and helpers
-  log/                - structured logger construction (wraps go.uber.org/zap)
+    data/             — Data API gRPC server (produce, fetch, offset queries, group ops)
+    management/       — Management API gRPC server (topic and cluster admin)
+  auth/               — token-based authentication interceptor
+  metrics/            — Prometheus metric registration and helpers
+  log/                — structured logger construction (wraps go.uber.org/zap)
 
 pkg/
-  client/             - public Producer, Consumer, AdminClient library
-  proto/              - generated Protobuf + gRPC stubs compiled from api/*.proto
+  client/             — public Producer, Consumer, AdminClient library
+  proto/              — generated Protobuf + gRPC stubs compiled from api/*.proto
 ```
 
 **Proto file convention:** source `.proto` files live in `api/` at the repo root. Generated `*.pb.go` and `*_grpc.pb.go` files are committed to `pkg/proto/` and regenerated via `buf generate` or `protoc` as part of the build. `api/` contains no Go code; `pkg/proto/` contains no hand-written code.
@@ -69,7 +69,7 @@ pkg/
 
 **Non-responsibilities:** Does not watch for file changes at runtime; does not expose config over the network.
 
-**Primary collaborators:** `cmd/bunnymq` (in) - the entrypoint is the only caller.
+**Primary collaborators:** `cmd/bunnymq` (in) — the entrypoint is the only caller.
 
 ---
 
@@ -79,7 +79,7 @@ pkg/
 
 **Non-responsibilities:** Does not interpret the content of Raft entries (that is the FSMs' job); does not know about topics or partitions at a semantic level.
 
-**Primary collaborators:** `internal/metadata` (out - registers Metadata FSM), `internal/partition` (out - registers Partition FSMs), `internal/coordinator/cluster` (in - triggers shard creation/removal), `internal/coordinator/data` (in - Propose/SyncPropose for writes, LookupPartition for reads).
+**Primary collaborators:** `internal/metadata` (out — registers Metadata FSM), `internal/partition` (out — registers Partition FSMs), `internal/coordinator/cluster` (in — triggers shard creation/removal), `internal/coordinator/data` (in — Propose/SyncPropose for writes, LookupPartition for reads).
 
 ---
 
@@ -89,17 +89,17 @@ pkg/
 
 **Non-responsibilities:** Does not initiate writes to itself; all mutations arrive as committed Raft log entries routed through dragonboat. Does not perform network I/O.
 
-**Primary collaborators:** `internal/raft` (in - dragonboat calls `Update` / `Lookup` / `SaveSnapshot` / `RecoverFromSnapshot`), `internal/coordinator/cluster` (in - reads cluster state via Lookup; writes via SyncPropose), `internal/coordinator/group` (in - reads/writes group state via SyncPropose), `internal/coordinator/data` (in - reads partition leader via Lookup).
+**Primary collaborators:** `internal/raft` (in — dragonboat calls `Update` / `Lookup` / `SaveSnapshot` / `RecoverFromSnapshot`), `internal/coordinator/cluster` (in — reads cluster state via Lookup; writes via SyncPropose), `internal/coordinator/group` (in — reads/writes group state via SyncPropose), `internal/coordinator/data` (in — reads partition leader via Lookup).
 
 ---
 
 ### `internal/partition`
 
-**Responsibility:** Implement dragonboat's `IOnDiskStateMachine` interface for a single partition shard. On `Update`, decode the Raft entry into a produce command, delegate to `internal/storage`, and update the in-memory `lastAppliedIndex` cache. On `Lookup`, serve read requests from `internal/storage` bounded by `lastAppliedIndex` - **no Raft round-trip**; the cached index is the visibility boundary. On `Open`, recover Storage from existing segment files. On `SaveSnapshot` / `RecoverFromSnapshot`, stream segment files as described in §5.
+**Responsibility:** Implement dragonboat's `IOnDiskStateMachine` interface for a single partition shard. On `Update`, decode the Raft entry into a produce command, delegate to `internal/storage`, and update the in-memory `lastAppliedIndex` cache. On `Lookup`, serve read requests from `internal/storage` bounded by `lastAppliedIndex` — **no Raft round-trip**; the cached index is the visibility boundary. On `Open`, recover Storage from existing segment files. On `SaveSnapshot` / `RecoverFromSnapshot`, stream segment files as described in §5.
 
 **Non-responsibilities:** Does not manage segment files directly; all I/O is through `internal/storage`. Does not know about topics or consumer groups. Must not call `time.Now()`, `rand` without an explicit seed embedded in the command, or any network I/O inside `Update`.
 
-**Primary collaborators:** `internal/raft` (in - dragonboat lifecycle calls), `internal/storage` (out - all disk I/O).
+**Primary collaborators:** `internal/raft` (in — dragonboat lifecycle calls), `internal/storage` (out — all disk I/O).
 
 ---
 
@@ -107,9 +107,9 @@ pkg/
 
 **Responsibility:** Manage the segmented append-only log for one partition replica. Provide `Append(batch)`, `Read(offset, maxBytes)`, `OffsetForTimestamp(ts)`, `EarliestOffset()`, `LatestOffset()`, `Trim(retentionMs, retentionBytes)`, and `Recover()` operations. Internally manage: active `SegmentStorage` (wraps `LogSegment` + `OffsetIndexSegment` + `TimeIndexSegment`), segment roll when the active segment exceeds the size limit, and index lookup via binary search on mmap'd index files followed by a linear scan of the log. Run a background retention goroutine that calls `Trim` on a configurable interval using the retention config passed at construction; the config can be updated at runtime via `SetRetentionConfig`.
 
-**Non-responsibilities:** Does not know about Raft, topics, or consumer groups. Does not push notifications to consumers directly - instead it signals an internal `newDataCh` (closed and replaced on each append) that callers may select on.
+**Non-responsibilities:** Does not know about Raft, topics, or consumer groups. Does not push notifications to consumers directly — instead it signals an internal `newDataCh` (closed and replaced on each append) that callers may select on.
 
-**Primary collaborators:** `internal/partition` (in - all callers go through the Partition FSM).
+**Primary collaborators:** `internal/partition` (in — all callers go through the Partition FSM).
 
 ---
 
@@ -119,7 +119,7 @@ pkg/
 
 **Non-responsibilities:** Does not handle produce or fetch traffic. Does not manage consumer group state. Does not call `internal/storage` directly.
 
-**Primary collaborators:** `internal/raft` (out - shard start/stop, SyncPropose to metadata shard, Propose to partition shards for retention-config updates), `internal/metadata` (in - reads cluster state), `internal/api/management` (in - receives admin RPC calls).
+**Primary collaborators:** `internal/raft` (out — shard start/stop, SyncPropose to metadata shard, Propose to partition shards for retention-config updates), `internal/metadata` (in — reads cluster state), `internal/api/management` (in — receives admin RPC calls).
 
 ---
 
@@ -129,7 +129,7 @@ pkg/
 
 **Non-responsibilities:** Does not manage shard lifecycle. Does not manage consumer group assignments. Does not write directly to Storage.
 
-**Primary collaborators:** `internal/raft` (out - ProposePartition/SyncProposePartition for writes, LookupPartition for reads), `internal/metadata` (in - partition leader lookup), `internal/api/data` (in - receives producer and consumer RPC calls).
+**Primary collaborators:** `internal/raft` (out — ProposePartition/SyncProposePartition for writes, LookupPartition for reads), `internal/metadata` (in — partition leader lookup), `internal/api/data` (in — receives producer and consumer RPC calls).
 
 ---
 
@@ -139,7 +139,7 @@ pkg/
 
 **Non-responsibilities:** Does not handle produce or fetch of message data. Does not assign partition shards or start Raft groups. Rebalance strategy is hardcoded to range-based in v1.
 
-**Primary collaborators:** `internal/raft` (out - SyncPropose for group state mutations), `internal/metadata` (in - reads group state), `internal/api/data` (in - receives group RPC calls).
+**Primary collaborators:** `internal/raft` (out — SyncPropose for group state mutations), `internal/metadata` (in — reads group state), `internal/api/data` (in — receives group RPC calls).
 
 ---
 
@@ -149,7 +149,7 @@ pkg/
 
 **Non-responsibilities:** No business logic beyond request validation and response marshalling. Does not touch storage or Raft directly.
 
-**Primary collaborators:** `internal/coordinator/data` (out), `internal/coordinator/group` (out), `internal/auth` (in - gRPC interceptor), `pkg/proto` (in - generated types).
+**Primary collaborators:** `internal/coordinator/data` (out), `internal/coordinator/group` (out), `internal/auth` (in — gRPC interceptor), `pkg/proto` (in — generated types).
 
 ---
 
@@ -159,7 +159,7 @@ pkg/
 
 **Non-responsibilities:** No business logic beyond request validation and response marshalling. Does not handle consumer group or data-plane traffic.
 
-**Primary collaborators:** `internal/coordinator/cluster` (out), `internal/auth` (in - gRPC interceptor), `pkg/proto` (in - generated types).
+**Primary collaborators:** `internal/coordinator/cluster` (out), `internal/auth` (in — gRPC interceptor), `pkg/proto` (in — generated types).
 
 ---
 
@@ -169,7 +169,7 @@ pkg/
 
 **Non-responsibilities:** No authorization (ACL) logic. No token issuance. No TLS handling (TLS termination is a gRPC server configuration concern).
 
-**Primary collaborators:** `internal/api/data` (in), `internal/api/management` (in), `internal/config` (in - token list).
+**Primary collaborators:** `internal/api/data` (in), `internal/api/management` (in), `internal/config` (in — token list).
 
 ---
 
@@ -179,7 +179,7 @@ pkg/
 
 **Non-responsibilities:** Does not start the HTTP server (that is `cmd/bunnymq`'s job). Does not aggregate across nodes.
 
-**Primary collaborators:** `internal/coordinator/data` (in - produce/fetch metrics), `internal/coordinator/group` (in - lag metrics), `internal/storage` (in - byte metrics).
+**Primary collaborators:** `internal/coordinator/data` (in — produce/fetch metrics), `internal/coordinator/group` (in — lag metrics), `internal/storage` (in — byte metrics).
 
 ---
 
@@ -189,7 +189,7 @@ pkg/
 
 **Non-responsibilities:** Does not write log entries itself; callers hold a reference to the logger.
 
-**Primary collaborators:** `cmd/bunnymq` (in - constructs the logger at startup); all other modules (in - receive a logger instance).
+**Primary collaborators:** `cmd/bunnymq` (in — constructs the logger at startup); all other modules (in — receive a logger instance).
 
 ---
 
@@ -199,7 +199,7 @@ pkg/
 
 **Non-responsibilities:** No broker-side logic. No direct storage or Raft access.
 
-**Primary collaborators:** `pkg/proto` (out - generated stubs), broker's `internal/api/data` and `internal/api/management` (out, over gRPC - remote peers).
+**Primary collaborators:** `pkg/proto` (out — generated stubs), broker's `internal/api/data` and `internal/api/management` (out, over gRPC — remote peers).
 
 ---
 
@@ -209,7 +209,7 @@ pkg/
 
 **Non-responsibilities:** No hand-written logic. All content is generated; do not edit directly.
 
-**Primary collaborators:** `internal/api/data`, `internal/api/management` (in - server-side stubs), `pkg/client` (in - client-side stubs).
+**Primary collaborators:** `internal/api/data`, `internal/api/management` (in — server-side stubs), `pkg/client` (in — client-side stubs).
 
 ---
 
@@ -304,19 +304,19 @@ These modules handle the hot path: produce, fetch, and consumer group operations
 
 All other modules access replicated state only through typed helpers in `internal/raft`:
 
-- **Metadata reads:** `internal/raft.LookupMetadata(cmd)` - calls dragonboat `ReadLocalNode` on the metadata shard.
+- **Metadata reads:** `internal/raft.LookupMetadata(cmd)` — calls dragonboat `ReadLocalNode` on the metadata shard.
 - **Metadata writes:** `internal/raft.SyncProposeMetadata(cmd)` / `ProposeMetadata(cmd)`.
 - **Partition writes:** `internal/raft.SyncProposePartition(shardID, cmd)` / `ProposePartition(shardID, cmd)`.
-- **Partition reads:** `internal/raft.LookupPartition(shardID, query)` - calls the Partition FSM's `Lookup` which reads from storage bounded by the FSM's cached `lastAppliedIndex`; **no Raft consensus round-trip**.
+- **Partition reads:** `internal/raft.LookupPartition(shardID, query)` — calls the Partition FSM's `Lookup` which reads from storage bounded by the FSM's cached `lastAppliedIndex`; **no Raft consensus round-trip**.
 
 ### Partition FSM read path detail
 
-The Partition FSM's `Update()` sets `lastAppliedIndex = entry.Index` after each committed entry. `Lookup()` calls `storage.Read(offset, maxBytes, boundedBy=lastAppliedIndex)` directly. This means reads are bounded by the last applied index on the local replica - a local variable access, O(1). For at-least-once consumers this is correct: a committed entry is guaranteed durable and visible once `Update()` has run. No per-read Raft round-trip.
+The Partition FSM's `Update()` sets `lastAppliedIndex = entry.Index` after each committed entry. `Lookup()` calls `storage.Read(offset, maxBytes, boundedBy=lastAppliedIndex)` directly. This means reads are bounded by the last applied index on the local replica — a local variable access, O(1). For at-least-once consumers this is correct: a committed entry is guaranteed durable and visible once `Update()` has run. No per-read Raft round-trip.
 
 ### Snapshot strategy for Partition FSM
 
 `IOnDiskStateMachine.SaveSnapshot(w ISnapshotter, done <-chan struct{})`:
-1. Enumerate all sealed segment file pairs (`.log`, `.oidx`, `.tidx`) - these are immutable once sealed.
+1. Enumerate all sealed segment file pairs (`.log`, `.oidx`, `.tidx`) — these are immutable once sealed.
 2. Enumerate the active segment, truncated to the byte range corresponding to `lastAppliedIndex`.
 3. Write each file to `w` using `ISnapshotter.Save(filename, reader)`.
 
@@ -325,7 +325,7 @@ The Partition FSM's `Update()` sets `lastAppliedIndex = entry.Index` after each 
 2. Restore files from `r` using `ISnapshotter.Load(filename, writer)`.
 3. Call `storage.Recover()` to rebuild in-memory state (offset maps, active segment pointer).
 
-Sealed segments are transferred as-is - no serialization overhead. The active segment requires a single read up to the committed byte boundary. This approach is efficient (file streaming) and straightforward to implement.
+Sealed segments are transferred as-is — no serialization overhead. The active segment requires a single read up to the committed byte boundary. This approach is efficient (file streaming) and straightforward to implement.
 
 ### Fetch long-polling detail
 
@@ -349,7 +349,7 @@ for {
 }
 ```
 
-The goroutine sleeps exactly until new data arrives or the timeout fires - zero polling overhead between wakeups.
+The goroutine sleeps exactly until new data arrives or the timeout fires — zero polling overhead between wakeups.
 
 ---
 

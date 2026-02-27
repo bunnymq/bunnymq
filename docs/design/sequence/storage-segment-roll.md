@@ -1,6 +1,6 @@
 # storage-segment-roll: Sealing the Active Segment and Creating a New One
 
-A segment roll is triggered at the end of `Storage.Append` when `activeSegment.logSize >= segment_max_bytes`. The roll is performed synchronously within the `Append` call while the write lock is held. It seals the current active `SegmentStorage` - truncating and msync'ing its index files, remapping them read-only, and fsyncing the log file - then constructs a new `SegmentStorage` with `baseOffset = nextOffset`, pre-allocates its index files, and maps them read-write. After the roll the new segment becomes the active one and the formerly active segment joins the sealed list.
+A segment roll is triggered at the end of `Storage.Append` when `activeSegment.logSize >= segment_max_bytes`. The roll is performed synchronously within the `Append` call while the write lock is held. It seals the current active `SegmentStorage` — truncating and msync'ing its index files, remapping them read-only, and fsyncing the log file — then constructs a new `SegmentStorage` with `baseOffset = nextOffset`, pre-allocates its index files, and maps them read-write. After the roll the new segment becomes the active one and the formerly active segment joins the sealed list.
 
 ```mermaid
 sequenceDiagram

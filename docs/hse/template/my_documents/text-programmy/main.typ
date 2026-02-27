@@ -1,5 +1,5 @@
 // =============================================================
-// Текст программы - ГОСТ 19.401–78
+// Текст программы — ГОСТ 19.401–78
 // «Очередь сообщений на языке Go с гарантиями доставки
 //  и горизонтальным масштабированием»
 //
@@ -71,23 +71,23 @@ BunnyMQ --- распределённый брокер сообщений, реа
 Структура репозитория:
 
 ```
-api/ - исходные .proto-файлы (Data API и Management API)
+api/ — исходные .proto-файлы (Data API и Management API)
 cmd/
-  bunnymq/ - точка входа брокера
-  bunnymq-cli/ - утилита командной строки
+  bunnymq/ — точка входа брокера
+  bunnymq-cli/ — утилита командной строки
 internal/
-  config/ - загрузка и валидация конфигурации
-  raft/ - обёртка над dragonboat NodeHost
-  metadata/ - Metadata FSM (IStateMachine)
-  partition/ - Partition FSM (IOnDiskStateMachine)
-  storage/ - сегментированный журнал (Storage, SegmentStorage, ...)
+  config/ — загрузка и валидация конфигурации
+  raft/ — обёртка над dragonboat NodeHost
+  metadata/ — Metadata FSM (IStateMachine)
+  partition/ — Partition FSM (IOnDiskStateMachine)
+  storage/ — сегментированный журнал (Storage, SegmentStorage, ...)
   coordinator/
-    cluster/ - ClusterCoordinator
+    cluster/ — ClusterCoordinator
     data/ - DataCoordinator
     group/ - GroupCoordinator
   api/
     data/ - gRPC-сервер Data API
-    management/- gRPC-сервер Management API
+    management/— gRPC-сервер Management API
   auth/ - перехватчик аутентификации
   metrics/ - регистрация метрик Prometheus
   log/ - конструктор структурированного логгера (zap)

@@ -4,7 +4,7 @@ A previously-known node (Node-3) restarts after a crash or planned maintenance. 
 
 ---
 
-## Phase 1 - Rejoin metadata shard
+## Phase 1 — Rejoin metadata shard
 
 ```mermaid
 sequenceDiagram
@@ -15,7 +15,7 @@ sequenceDiagram
     participant MFSM1 as MetadataFSM<br/>(Node-1)
     participant MFSM3 as MetadataFSM<br/>(Node-3)
 
-    Note over N3: Reads config: node_id=3, peers, data_dir.<br/>Data dir exists from prior run - FSM snapshot and Raft log may be present.
+    Note over N3: Reads config: node_id=3, peers, data_dir.<br/>Data dir exists from prior run — FSM snapshot and Raft log may be present.
 
     N3->>DB3: StartCluster(shardID=0, nodeID=3,<br/>initialMembers={1,2,3}, join=true, MetadataFSM{})
     Note over DB3: join=true → dragonboat opens existing Raft log<br/>on disk. Contacts current leader to catch up.
@@ -39,7 +39,7 @@ sequenceDiagram
 
 ---
 
-## Phase 2 - ClusterCoordinator reads recovered state
+## Phase 2 — ClusterCoordinator reads recovered state
 
 ```mermaid
 sequenceDiagram
@@ -65,7 +65,7 @@ sequenceDiagram
 
 ---
 
-## Phase 3 - DataCoordinator rejoins partition shards and recovers Storage
+## Phase 3 — DataCoordinator rejoins partition shards and recovers Storage
 
 ```mermaid
 sequenceDiagram
@@ -116,7 +116,7 @@ sequenceDiagram
 
 ---
 
-## Phase 4 - gRPC listeners start, node signals ready
+## Phase 4 — gRPC listeners start, node signals ready
 
 ```mermaid
 sequenceDiagram
@@ -143,7 +143,7 @@ Node-3 process start
   │
   ├─ 1. Load config
   ├─ 2. Open dragonboat NodeHost (existing data dir)
-  ├─ 3. StartCluster(shardID=0, join=true) - metadata shard catch-up
+  ├─ 3. StartCluster(shardID=0, join=true) — metadata shard catch-up
   ├─ 4. Wait for metadata shard catch-up complete
   │      (MetadataFSM consistent with cluster)
   ├─ 5. ClusterCoordinator.Start()
@@ -168,4 +168,4 @@ Steps 3 and 6 block on dragonboat catch-up. The node does not accept client traf
 - **applied.idx recovery.** The `applied.idx` sidecar (16 bytes: `last_raft_index + latest_offset`) tells dragonboat's `IOnDiskStateMachine.Open` what the last durably applied index was. dragonboat uses this to determine how far back the Raft log catch-up must go. See [03-raft-fsm.md](./03-raft-fsm.md) and [02-storage.md](./02-storage.md).
 - **Missed partition shard leadership.** While Node-3 was offline, the partition shards it was replicating may have elected new leaders among the remaining nodes (since RF=3, a quorum of 2 can proceed). On rejoin, Node-3 becomes a follower again for those shards. If the cluster decides Node-3 should be the leader (e.g. via dragonboat's election), it will be elected normally after catch-up.
 - **Split-brain guard.** If Node-3 comes back with a stale Raft log index that differs from the cluster's committed log, dragonboat's catch-up mechanism handles it. No manual intervention is needed.
-- **New node (never seen before).** Adding a completely new node (not a restart) is out of scope for v1 (static membership). If needed, dragonboat supports dynamic membership via `RequestAddNode` - deferred to post-v1.
+- **New node (never seen before).** Adding a completely new node (not a restart) is out of scope for v1 (static membership). If needed, dragonboat supports dynamic membership via `RequestAddNode` — deferred to post-v1.

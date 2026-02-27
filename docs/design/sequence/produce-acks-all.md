@@ -9,7 +9,7 @@ sequenceDiagram
     participant DC as DataCoordinator<br/>(this node)
     participant RH as RaftHost<br/>(this node)
     participant DB as dragonboat<br/>(partition shard)
-    participant PFSM as PartitionFSM<br/>(leader node - this node)
+    participant PFSM as PartitionFSM<br/>(leader node — this node)
     participant STR as Storage<br/>(leader node)
     participant PFSMf as PartitionFSM<br/>(follower nodes)
 
@@ -17,7 +17,7 @@ sequenceDiagram
     DAPI->>+DC: Produce(ctx, topic, partitionID, batch, AcksAll)
 
     DC->>RH: LookupMetadata(QueryGetPartition{topic, partitionID})
-    Note over RH: ReadLocalNode - no Raft round-trip
+    Note over RH: ReadLocalNode — no Raft round-trip
     RH-->>DC: *PartitionMeta{LeaderNodeID, ShardID}
 
     alt this node is NOT the leader
@@ -37,7 +37,7 @@ sequenceDiagram
             PFSM->>+STR: Append(batch)
             Note over STR: Overwrites batch[0:8] with base_offset;<br/>writes to active .log segment;<br/>writes index entry if sampling threshold met;<br/>closes newDataCh (wakes long-poll fetchers)
             STR-->>-PFSM: base_offset (int64)
-            PFSM->>STR: Sync() - fsync active log
+            PFSM->>STR: Sync() — fsync active log
             PFSM->>PFSM: persistApplied(entry.Index)<br/>atomic sidecar write (applied.idx)
             PFSM-->>-DB: sm.Result{Value: uint64(base_offset)}
         and Followers apply

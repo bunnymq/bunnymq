@@ -1,6 +1,6 @@
 # Sequence: Topic List and Describe
 
-Read-only admin operations. Both are served from the local Metadata FSM via `ReadLocalNode` - no Raft consensus round-trip. Any broker node can serve them regardless of whether it is the metadata shard leader.
+Read-only admin operations. Both are served from the local Metadata FSM via `ReadLocalNode` — no Raft consensus round-trip. Any broker node can serve them regardless of whether it is the metadata shard leader.
 
 ---
 

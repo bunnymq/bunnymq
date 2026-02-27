@@ -1,4 +1,4 @@
-# CLAUDE.md - BunnyMQ Design Phase (Session 3: Stage 3-B)
+# CLAUDE.md — BunnyMQ Design Phase (Session 3: Stage 3-B)
 
 ## Project context
 
@@ -21,13 +21,13 @@ On every session start, before doing anything else:
    - `docs/design/03-raft-fsm.md` (session 2)
    - `docs/design/09-metrics-logging.md` (session 2)
    - All files in `docs/design/sequence/` produced by session 2.
-4. List existing files in `docs/design/` and `docs/design/sequence/`. Anything beyond the files mentioned above is unexpected - report to user before doing anything else.
+4. List existing files in `docs/design/` and `docs/design/sequence/`. Anything beyond the files mentioned above is unexpected — report to user before doing anything else.
 5. Skim `docs/adr/` only if you need historical context for a specific decision. These are pre-dragonboat sketches and contradict current architecture in many places. Do not modify them.
 6. Confirm to the user in chat which module you are starting with and ask for go-ahead.
 
 ## Architectural decisions (fixed; not for redesign)
 
-These decisions are not open for discussion. If a design constraint forces reconsidering one, raise the conflict to the user in chat - do not unilaterally change.
+These decisions are not open for discussion. If a design constraint forces reconsidering one, raise the conflict to the user in chat — do not unilaterally change.
 
 1. **Language:** Go (current stable version).
 2. **Consensus and replication:** library `github.com/lni/dragonboat/v4`. Multi-raft model: one Raft shard per partition, plus one shard for cluster metadata.
@@ -36,7 +36,7 @@ These decisions are not open for discussion. If a design constraint forces recon
 5. **Storage:** segmented append-only log, Kafka-style. Index files are mmap'd. Log file is append-only. Batch format on disk equals batch format on wire. Detailed in `02-storage.md`.
 6. **Metadata FSM:** `IStateMachine` (in-memory state, JSON snapshots). Sole writer is the cluster coordinator module. Detailed in `03-raft-fsm.md`.
 7. **Partition FSM:** `IOnDiskStateMachine` wrapping `Storage`. The FSM `Update()` method is strictly deterministic. Detailed in `03-raft-fsm.md`.
-8. **Consumer groups:** minimal v1 - simple range-based assignment, no cooperative rebalance. Architecture must allow future extension to richer protocols.
+8. **Consumer groups:** minimal v1 — simple range-based assignment, no cooperative rebalance. Architecture must allow future extension to richer protocols.
 9. **Tests:** unit tests for Storage and FSM are mandatory; integration tests via docker-compose with node-kill scenarios are scheduled for the final implementation milestone.
 10. **Authentication:** token-based via gRPC metadata, configured at startup, no rotation/expiration in v1. PLAINTEXT mode (empty token list) is supported and is default for the demo. See `REQUIREMENTS.md` §8.
 
@@ -47,7 +47,7 @@ These decisions are not open for discussion. If a design constraint forces recon
 - Read and write files in `docs/design/`.
 - Write sequence diagrams in **mermaid** format only (not plantuml).
 - Run shell commands for investigation: `tree`, `ls`, `grep`, `cat`. Use them sparingly.
-- Read dragonboat documentation online via web fetch when available. **Verify dragonboat API specifics before relying on them in design documents** - see hallucination protocol below.
+- Read dragonboat documentation online via web fetch when available. **Verify dragonboat API specifics before relying on them in design documents** — see hallucination protocol below.
 - Read gRPC and protobuf documentation online when needed.
 - Point-look at the local Kafka repository at `/Users/bbagaviev/source/kafka/` only for concrete byte-level details or specific protocol message layouts. Limit: up to 3 files per look-up, with targeted `grep`/`cat`.
 
@@ -64,15 +64,15 @@ These decisions are not open for discussion. If a design constraint forces recon
 
 This session's modules touch areas where LLM-generated designs are at higher risk of containing plausible-but-wrong details. Specifically: dragonboat's API surface beyond `SyncPropose`/`Update`/`Lookup`, gRPC streaming patterns, consumer group rebalance semantics. Apply the following rules:
 
-1. **For dragonboat:** before specifying a method signature, configuration field, or behavior, either (a) cite a source - link to dragonboat docs or recall a verifiable fact - or (b) mark it as `// VERIFY: <what to verify>` in the design doc and surface it in the open questions list. Do not write design that locks in API details you are not sure about.
+1. **For dragonboat:** before specifying a method signature, configuration field, or behavior, either (a) cite a source — link to dragonboat docs or recall a verifiable fact — or (b) mark it as `// VERIFY: <what to verify>` in the design doc and surface it in the open questions list. Do not write design that locks in API details you are not sure about.
 
 2. **For gRPC streaming and bidirectional RPCs:** the same rule. Streaming patterns have non-obvious semantics around backpressure, error propagation, and connection lifecycle. If unsure, mark as VERIFY and ask the user.
 
-3. **For protobuf message layouts:** these are generally low-risk to specify, but explicitly note any field that is "Kafka-compatible" or "matches Kafka X.Y" without verification - mark as VERIFY.
+3. **For protobuf message layouts:** these are generally low-risk to specify, but explicitly note any field that is "Kafka-compatible" or "matches Kafka X.Y" without verification — mark as VERIFY.
 
-4. **General rule:** if you find yourself writing "this should work because…" or "Claude knows that…" - stop, mark as VERIFY, and surface in open questions. The design phase exists to make the implementation phase boring; ambiguity smuggled into the design becomes implementation-phase debugging.
+4. **General rule:** if you find yourself writing "this should work because…" or "Claude knows that…" — stop, mark as VERIFY, and surface in open questions. The design phase exists to make the implementation phase boring; ambiguity smuggled into the design becomes implementation-phase debugging.
 
-### Conceptual questions about Kafka - relay through the user
+### Conceptual questions about Kafka — relay through the user
 
 Do not browse Kafka source for concepts. Format a question for the user to relay to a separate Claude Code session opened in the Kafka repository. Use this exact template, and emit it to the chat:
 
@@ -88,7 +88,7 @@ Do not browse Kafka source for concepts. Format a question for the user to relay
 **Expected answer format:** <markdown / list / paragraph / mermaid>
 ```
 
-Use this mechanism economically - one outstanding question at a time. Wait for the user's reply before asking the next.
+Use this mechanism economically — one outstanding question at a time. Wait for the user's reply before asking the next.
 
 ### Architectural ambiguity
 
@@ -168,7 +168,7 @@ The numeric prefix gap (00, 01, 02, 03, 04, 05, 06, 07, 08, 09) is now closed.
 
 Five modules. Each gets its own design doc and a set of sequence diagrams. Approval is per-module. After all five are approved, you produce a session-end summary.
 
-The modules form layers: ClusterCoordinator and DataCoordinator sit on top of the Raft layer designed in session 2. APIs sit on top of coordinators. ClientLibrary sits on top of APIs (logically - it is a separate process). ConsumerGroups is a feature that touches coordinators, metadata FSM, and APIs.
+The modules form layers: ClusterCoordinator and DataCoordinator sit on top of the Raft layer designed in session 2. APIs sit on top of coordinators. ClientLibrary sits on top of APIs (logically — it is a separate process). ConsumerGroups is a feature that touches coordinators, metadata FSM, and APIs.
 
 ### Module 1: Cluster Coordinator (`04-cluster-coordinator.md`)
 
@@ -186,8 +186,8 @@ The modules form layers: ClusterCoordinator and DataCoordinator sit on top of th
   - `AlterTopicPartitionCount(ctx, name, newCount) error`
   - `AlterTopicRetention(ctx, name, retentionMs, retentionBytes) error`
   - `DescribeCluster(ctx) (ClusterDescription, error)`
-- For each method: describe the flow - which Raft commands are issued, which lookups are performed, what side effects happen on success.
-- Topic creation: detailed flow. (a) Validate inputs. (b) Choose replica assignments - algorithm for placing N partitions × RF replicas across the M nodes (e.g. round-robin starting at a hash of the topic name). (c) Allocate shard IDs for the new partition shards (deterministic - derived from a counter in metadata or from `topic_name + partition_id`). (d) Issue `CreateTopic` Raft command to the metadata shard. (e) On commit, the cluster coordinator on every node sees the new topic in its local metadata FSM lookup. (f) Each node spawns the Raft replicas for partition shards it is assigned to (this happens in the partition lifecycle layer - describe the trigger; actual implementation is in DataCoordinator).
+- For each method: describe the flow — which Raft commands are issued, which lookups are performed, what side effects happen on success.
+- Topic creation: detailed flow. (a) Validate inputs. (b) Choose replica assignments — algorithm for placing N partitions × RF replicas across the M nodes (e.g. round-robin starting at a hash of the topic name). (c) Allocate shard IDs for the new partition shards (deterministic — derived from a counter in metadata or from `topic_name + partition_id`). (d) Issue `CreateTopic` Raft command to the metadata shard. (e) On commit, the cluster coordinator on every node sees the new topic in its local metadata FSM lookup. (f) Each node spawns the Raft replicas for partition shards it is assigned to (this happens in the partition lifecycle layer — describe the trigger; actual implementation is in DataCoordinator).
 - Topic deletion: detailed flow. Mark topic as `Deleting` in metadata, all subsequent reads and writes against it return TopicNotFound. Background process (described here) tears down partition Raft shards and deletes Storage directories.
 - Partition shard ID allocation: specify the deterministic mapping. Reference `03-raft-fsm.md`.
 - Leader epoch updates: when the partition shard reports a new leader (via a Raft command from the leading replica or via a periodic background sweep), the cluster coordinator commits an `UpdatePartitionLeader` command to the metadata FSM. Specify which mechanism is used. **Mark as VERIFY** the exact mechanism by which dragonboat surfaces leader changes.
@@ -198,9 +198,9 @@ The modules form layers: ClusterCoordinator and DataCoordinator sit on top of th
 - Open questions for the user.
 
 **Sequence diagrams:**
-- `topic-create.md` - full flow from gRPC entry to clients seeing the topic.
-- `topic-delete.md` - async deletion, partition shard teardown.
-- `topic-list-describe.md` - read paths.
+- `topic-create.md` — full flow from gRPC entry to clients seeing the topic.
+- `topic-delete.md` — async deletion, partition shard teardown.
+- `topic-list-describe.md` — read paths.
 
 ### Module 2: Data Coordinator (`05-data-coordinator.md`)
 
@@ -210,29 +210,29 @@ The modules form layers: ClusterCoordinator and DataCoordinator sit on top of th
 
 - Summary.
 - Responsibilities and non-responsibilities.
-- Public interface - Go-style methods. Cover at minimum:
+- Public interface — Go-style methods. Cover at minimum:
   - `Produce(ctx, topic, partitionID, batch, acks) (offset int64, err error)`
   - `Fetch(ctx, topic, partitionID, offset, maxBytes, maxWaitMs) (records [][]byte, nextOffset int64, err error)`
   - `GetEarliestOffset(ctx, topic, partitionID) (int64, error)`
   - `GetLatestOffset(ctx, topic, partitionID) (int64, error)`
   - `GetOffsetByTimestamp(ctx, topic, partitionID, timestampMs) (int64, error)`
   - Internal: `StartPartitionReplica(topic, partitionID)`, `StopPartitionReplica(topic, partitionID)`
-- Partition replica lifecycle: when a partition is created and this node is in its replica set, DataCoordinator joins the partition Raft shard. When a partition is deleted, it leaves the shard and asks Storage to clean up. How does DataCoordinator learn about new/deleted partitions? Via watching the metadata FSM (polling at a configurable interval, or via a notification mechanism - specify which and **mark VERIFY** if dragonboat exposes notifications).
-- Routing logic for Produce: (a) Look up partition leader from metadata FSM. (b) If this node is the leader, call SyncPropose/Propose on the local Raft shard. (c) If this node is not the leader, return NotLeader error with the leader's address. The gRPC layer surfaces this to the client; the client retries against the leader. (Forwarding within the cluster is **not done in v1** - keep it client-side. Document this decision and rationale.)
-- Routing logic for Fetch: same - only the leader serves fetches in v1. Reads via `Lookup` on the local Partition FSM if this node is the leader; NotLeader otherwise.
-- Long-poll fetch: when `maxWaitMs > 0` and no records are available beyond `offset`, the request blocks until either (a) new records arrive, (b) the timeout expires, (c) leader changes (return NotLeader), (d) context cancellation. Specify the mechanism - channel-based notification from Partition FSM on each `Update`, or polling with backoff. Recommend channel-based; specify the implementation outline. **Mark VERIFY** if there are concerns about Partition FSM notifying out-of-band given dragonboat's threading model.
+- Partition replica lifecycle: when a partition is created and this node is in its replica set, DataCoordinator joins the partition Raft shard. When a partition is deleted, it leaves the shard and asks Storage to clean up. How does DataCoordinator learn about new/deleted partitions? Via watching the metadata FSM (polling at a configurable interval, or via a notification mechanism — specify which and **mark VERIFY** if dragonboat exposes notifications).
+- Routing logic for Produce: (a) Look up partition leader from metadata FSM. (b) If this node is the leader, call SyncPropose/Propose on the local Raft shard. (c) If this node is not the leader, return NotLeader error with the leader's address. The gRPC layer surfaces this to the client; the client retries against the leader. (Forwarding within the cluster is **not done in v1** — keep it client-side. Document this decision and rationale.)
+- Routing logic for Fetch: same — only the leader serves fetches in v1. Reads via `Lookup` on the local Partition FSM if this node is the leader; NotLeader otherwise.
+- Long-poll fetch: when `maxWaitMs > 0` and no records are available beyond `offset`, the request blocks until either (a) new records arrive, (b) the timeout expires, (c) leader changes (return NotLeader), (d) context cancellation. Specify the mechanism — channel-based notification from Partition FSM on each `Update`, or polling with backoff. Recommend channel-based; specify the implementation outline. **Mark VERIFY** if there are concerns about Partition FSM notifying out-of-band given dragonboat's threading model.
 - Acks=all flow: SyncPropose, wait for result, return offset from `sm.Result.Value`.
 - Acks=0 flow: Propose (async), do not wait for confirmation, return immediately. Document that the client receives no offset.
 - Concurrency: how many goroutines per partition shard, how do produce and fetch interleave, how does retention enforcement (called from the Partition FSM side) interact with in-flight reads.
-- Retention enforcement schedule: a background goroutine per partition replica calls `Storage.EnforceRetention` on a configurable interval (e.g. every 60 seconds). This runs **only on the leader** to avoid divergent state; followers' Storage cleanup is driven by their own FSM applying delete commands. Discuss whether retention is itself a Raft command or a local-only operation. **Recommend: Raft command** so that retention deletions are deterministic across replicas. Add a `DeleteSegmentsBefore(offset int64)` command type to the Partition FSM command set in `03-raft-fsm.md` (note this in the open questions for that document - the user can decide whether to update `03-raft-fsm.md` or accept the addition here).
+- Retention enforcement schedule: a background goroutine per partition replica calls `Storage.EnforceRetention` on a configurable interval (e.g. every 60 seconds). This runs **only on the leader** to avoid divergent state; followers' Storage cleanup is driven by their own FSM applying delete commands. Discuss whether retention is itself a Raft command or a local-only operation. **Recommend: Raft command** so that retention deletions are deterministic across replicas. Add a `DeleteSegmentsBefore(offset int64)` command type to the Partition FSM command set in `03-raft-fsm.md` (note this in the open questions for that document — the user can decide whether to update `03-raft-fsm.md` or accept the addition here).
 - Failure modes.
 - Open questions.
 
 **Sequence diagrams:**
 - `produce-acks-all.md`
 - `produce-acks-0.md`
-- `consumer-fetch.md` - basic fetch returning data.
-- `consumer-fetch-empty-wait.md` - long-poll fetch waiting for new records or timeout.
+- `consumer-fetch.md` — basic fetch returning data.
+- `consumer-fetch-empty-wait.md` — long-poll fetch waiting for new records or timeout.
 
 ### Module 3: API Protocol (`06-api-protocol.md`)
 
@@ -265,7 +265,7 @@ The modules form layers: ClusterCoordinator and DataCoordinator sit on top of th
 
 ### Module 4: Client Library (`07-client-library.md`)
 
-**Scope:** the public Go client library - `pkg/client`. Three types of clients: `Producer`, `Consumer`, `AdminClient`. Each is a thin wrapper over the gRPC client with retry, leader discovery, and reconnect logic.
+**Scope:** the public Go client library — `pkg/client`. Three types of clients: `Producer`, `Consumer`, `AdminClient`. Each is a thin wrapper over the gRPC client with retry, leader discovery, and reconnect logic.
 
 **Required contents:**
 
@@ -291,9 +291,9 @@ The modules form layers: ClusterCoordinator and DataCoordinator sit on top of th
 - Open questions.
 
 **Sequence diagrams:**
-- `client-producer-send.md` - full path including metadata cache, leader discovery, NotLeader retry.
-- `client-consumer-poll.md` - group consumer poll loop including background heartbeat.
-- `client-leader-discovery.md` - what happens when a producer or consumer hits NotLeader.
+- `client-producer-send.md` — full path including metadata cache, leader discovery, NotLeader retry.
+- `client-consumer-poll.md` — group consumer poll loop including background heartbeat.
+- `client-leader-discovery.md` — what happens when a producer or consumer hits NotLeader.
 
 ### Module 5: Consumer Groups (`08-consumer-groups.md`)
 
@@ -328,7 +328,7 @@ The modules form layers: ClusterCoordinator and DataCoordinator sit on top of th
 - `group-join.md`
 - `group-heartbeat.md`
 - `group-leave.md`
-- `group-rebalance.md` - triggered by membership change.
+- `group-rebalance.md` — triggered by membership change.
 - `offset-commit.md`
 - `offset-fetch.md`
 
@@ -336,9 +336,9 @@ The modules form layers: ClusterCoordinator and DataCoordinator sit on top of th
 
 These are not tied to a single module but should be produced as part of this session because all modules involved are now designed. Place them under `docs/design/sequence/` alongside the module-specific ones.
 
-- `startup-cluster.md` - fresh cluster bootstrap: 3 nodes start simultaneously, metadata shard forms, no topics yet, all nodes become ready.
-- `startup-node-join.md` - one node restarts in an existing cluster, rejoins metadata shard and all partition shards it was previously a member of, recovers Storage state.
-- `shutdown-graceful.md` - single-node graceful shutdown: stop accepting new RPCs, drain in-flight requests, leave Raft shards (or transfer leadership), flush Storage, exit.
+- `startup-cluster.md` — fresh cluster bootstrap: 3 nodes start simultaneously, metadata shard forms, no topics yet, all nodes become ready.
+- `startup-node-join.md` — one node restarts in an existing cluster, rejoins metadata shard and all partition shards it was previously a member of, recovers Storage state.
+- `shutdown-graceful.md` — single-node graceful shutdown: stop accepting new RPCs, drain in-flight requests, leave Raft shards (or transfer leadership), flush Storage, exit.
 
 These are not assigned to any single module document. The agent produces them after Module 5 is approved and before the session-end summary.
 

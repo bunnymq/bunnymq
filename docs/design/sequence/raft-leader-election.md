@@ -19,7 +19,7 @@ sequenceDiagram
     DB->>DB: HeartbeatRTT timer expires; no heartbeat from OldLeader
     DB->>DB: ElectionRTT timeout (10 × RTT = 2 s); start election
 
-    Note over DB,NL: dragonboat election - internal Raft protocol (black box)
+    Note over DB,NL: dragonboat election — internal Raft protocol (black box)
     DB->>NL: RequestVote RPCs to all replicas
     NL-->>DB: vote granted
     Note over NL: NewLeader wins quorum; becomes leader for partition shard S
@@ -61,7 +61,7 @@ sequenceDiagram
 | `dragonboat` | Manages the Raft election as a black box; delivers a `LeaderUpdated` callback when a new leader is elected. |
 | `NewLeader Node` | The replica elected as the new leader by dragonboat's Raft protocol. |
 | `NodeHostWrapper` | Receives the `LeaderUpdated` callback from dragonboat and dispatches it to the Cluster Coordinator. |
-| `ClusterCoordinator` | Translates the leader-change event into a metadata command. Uses `time.Now()` here - this is the coordinator, not the FSM. |
+| `ClusterCoordinator` | Translates the leader-change event into a metadata command. Uses `time.Now()` here — this is the coordinator, not the FSM. |
 | `RaftHost` | Proposes the `AssignPartitionLeader` command to the metadata shard. |
 | `dragonboat (shard 0)` | Replicates the metadata update. |
 | `MetadataFSM` | Applies the leader update deterministically (validates epoch to reject stale callbacks). |

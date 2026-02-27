@@ -1,6 +1,6 @@
 # storage-append: Appending a Batch to the Active Segment
 
-A `Append(batch)` call arrives from the Partition FSM (which received a committed Raft entry). Storage acquires its write lock, assigns the `base_offset` by writing it into `batch[0:8]`, delegates the write to the active `SegmentStorage`, conditionally writes index entries when the sampling threshold is crossed, broadcasts the new-data notification, and - if the log file now meets or exceeds the size threshold - seals the active segment and creates a new one. The call returns the assigned `base_offset` to the FSM, which stores it as the `sm.Result.Value` returned to dragonboat.
+A `Append(batch)` call arrives from the Partition FSM (which received a committed Raft entry). Storage acquires its write lock, assigns the `base_offset` by writing it into `batch[0:8]`, delegates the write to the active `SegmentStorage`, conditionally writes index entries when the sampling threshold is crossed, broadcasts the new-data notification, and — if the log file now meets or exceeds the size threshold — seals the active segment and creates a new one. The call returns the assigned `base_offset` to the FSM, which stores it as the `sm.Result.Value` returned to dragonboat.
 
 ```mermaid
 sequenceDiagram
@@ -39,7 +39,7 @@ sequenceDiagram
     S->>S: newDataCh = make(chan struct{})
 
     alt logSize >= segment_max_bytes
-        Note over S,TI: Segment roll - full detail in storage-segment-roll.md
+        Note over S,TI: Segment roll — full detail in storage-segment-roll.md
         S->>SS: Seal()
         SS->>OI: ftruncate to entryCount*8; msync; munmap; mmap PROT_READ
         SS->>TI: ftruncate to entryCount*12; msync; munmap; mmap PROT_READ

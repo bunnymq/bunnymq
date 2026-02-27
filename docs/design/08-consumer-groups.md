@@ -15,7 +15,7 @@ The Group Coordinator implements consumer group membership, partition assignment
 
 **Does not:**
 - Broker data reads or writes (those go through the Data Coordinator).
-- Forward group RPCs to the metadata shard leader - it returns `NOT_LEADER` and the client connects directly to the leader.
+- Forward group RPCs to the metadata shard leader — it returns `NOT_LEADER` and the client connects directly to the leader.
 - Implement sticky assignment, cooperative rebalance, static membership, or per-group configuration overrides (see §10 Limitations).
 
 ---
@@ -38,7 +38,7 @@ type MemberState struct {
     SubscribedTopics    []string
     SessionTimeoutMs    int32
     HeartbeatIntervalMs int32
-    // Last heartbeat time is NOT stored in the FSM - it is tracked in the
+    // Last heartbeat time is NOT stored in the FSM — it is tracked in the
     // coordinator's in-memory sweep table and written to the FSM only on eviction.
     JoinedAt time.Time // stored in FSM for audit; not used for timeout logic
 }
@@ -92,7 +92,7 @@ Clients include their `generation_id` in `Heartbeat` and `CommitOffset` calls. T
 Inputs:
 - `topics`: the union of subscribed topics across all current group members (v1 assumes all members subscribe to the same topic set; mixed subscriptions yield undefined assignment behaviour and are rejected with `INVALID_ARGUMENT`).
 - `members`: the sorted list of current `member_id` strings (lexicographic order).
-- `partitionCounts`: `map[topic]int32` - queried from the Metadata FSM at assignment time.
+- `partitionCounts`: `map[topic]int32` — queried from the Metadata FSM at assignment time.
 
 For each topic independently:
 
@@ -148,7 +148,7 @@ See [sequence/group-join.md](./sequence/group-join.md).
 
 Clients send `Heartbeat` every `heartbeat_interval_ms` (default 3 000 ms).
 
-The coordinator handles heartbeats entirely in memory - **no Raft round-trip** for a healthy heartbeat:
+The coordinator handles heartbeats entirely in memory — **no Raft round-trip** for a healthy heartbeat:
 1. Validate `member_id` is a known member of `group_id` (lookup from FSM via `QueryGetGroup`).
 2. Validate `generation_id` matches the current generation.
 3. Update the in-memory sweep table: `lastHeartbeat[group_id][member_id] = now`.
@@ -171,7 +171,7 @@ for each group in FSM:
             SyncProposeMetadata(LeaveConsumerGroupCmd{group_id, member_id, reason=Timeout})
 ```
 
-**VERIFY:** This goroutine must run only when this node is the metadata shard leader. The mechanism for detecting leadership is `// VERIFY: dragonboat v4 NodeHost or RaftHost API to query whether this node is the current leader of a given shard`. Candidate: `nh.GetLeaderID(shardID)` - returns `(leaderID, valid, err)`; goroutine runs the sweep only if `valid && leaderID == thisNodeID`. Mark as VERIFY until confirmed against dragonboat v4 docs.
+**VERIFY:** This goroutine must run only when this node is the metadata shard leader. The mechanism for detecting leadership is `// VERIFY: dragonboat v4 NodeHost or RaftHost API to query whether this node is the current leader of a given shard`. Candidate: `nh.GetLeaderID(shardID)` — returns `(leaderID, valid, err)`; goroutine runs the sweep only if `valid && leaderID == thisNodeID`. Mark as VERIFY until confirmed against dragonboat v4 docs.
 
 When a member's session expires:
 1. Sweep proposes `LeaveConsumerGroupCmd`.
@@ -196,7 +196,7 @@ See [sequence/group-leave.md](./sequence/group-leave.md).
 
 ## 11. Rebalance Flow
 
-A rebalance is not a standalone action by the coordinator - it is the consequence of a `JoinConsumerGroupCmd` or `LeaveConsumerGroupCmd` commit. There is no separate "rebalance" Raft command.
+A rebalance is not a standalone action by the coordinator — it is the consequence of a `JoinConsumerGroupCmd` or `LeaveConsumerGroupCmd` commit. There is no separate "rebalance" Raft command.
 
 The sequence:
 1. A membership-changing Raft command commits.
@@ -228,7 +228,7 @@ See [sequence/offset-commit.md](./sequence/offset-commit.md).
 
 ## 13. Offset Fetch Flow
 
-Offset fetches are **read-only** - no Raft round-trip:
+Offset fetches are **read-only** — no Raft round-trip:
 
 1. Client sends `FetchCommittedOffsetsRequest{group_id, partitions: []TopicPartition}`.
 2. Coordinator issues `LookupMetadata(QueryGetGroupOffsets{group_id, partitions})`.
@@ -278,7 +278,7 @@ A single `sync.RWMutex` protects `lastHeartbeat`. Heartbeat handlers acquire `Lo
 | Member crashes silently (no `LeaveGroup`) | Sweep goroutine detects missing heartbeat after `session_timeout_ms`. Proposes eviction. Remaining members learn on next heartbeat. |
 | Network partition isolates a member | Member's heartbeats stop reaching coordinator; evicted after timeout. When partition heals, member's heartbeat returns `NOT_GROUP_MEMBER` (member no longer in FSM); member re-issues `JoinGroup`. |
 | `CommitOffset` with stale `generation_id` | Coordinator returns `STALE_GENERATION`. Client re-issues `JoinGroup` to get the current generation, then retries the commit. |
-| Coordinator failover during `CommitOffset` SyncPropose | The propose may or may not have been applied. Client receives `UNAVAILABLE`. Client may re-issue the commit (idempotent - same offsets committed twice is harmless; the FSM takes the max). |
+| Coordinator failover during `CommitOffset` SyncPropose | The propose may or may not have been applied. Client receives `UNAVAILABLE`. Client may re-issue the commit (idempotent — same offsets committed twice is harmless; the FSM takes the max). |
 | All replicas of metadata shard offline | All group RPCs return `UNAVAILABLE`. No group management possible until quorum recovers. |
 
 ---
@@ -302,7 +302,7 @@ The following are explicitly **not implemented** in v1. Reference [REQUIREMENTS.
 
 2. **Mixed-subscription groups.** v1 rejects `JoinGroup` if the new member's topic list differs from existing members'. This is a strict simplification. Future work: allow mixed subscriptions and use range assignment per-member-per-topic based on that member's subscribed topics only.
 
-3. **Rebuild of `lastHeartbeat` on leader election.** The current design gives every member a fresh `session_timeout_ms` window after a leader change, which is conservative. An alternative is to read the `JoinedAt` timestamp from the FSM and subtract elapsed time - but this is fragile if clocks drift. The conservative approach is recommended for v1.
+3. **Rebuild of `lastHeartbeat` on leader election.** The current design gives every member a fresh `session_timeout_ms` window after a leader change, which is conservative. An alternative is to read the `JoinedAt` timestamp from the FSM and subtract elapsed time — but this is fragile if clocks drift. The conservative approach is recommended for v1.
 
 4. **`QueryGetGroup` performance under many groups.** If the cluster has thousands of groups, a single `LookupMetadata` that returns a full `GroupState` per group is fine for v1. Pagination or projection queries are post-v1.
 

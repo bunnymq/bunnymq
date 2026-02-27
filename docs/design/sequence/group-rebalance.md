@@ -1,4 +1,4 @@
-# Sequence: Consumer Group - Rebalance
+# Sequence: Consumer Group — Rebalance
 
 A rebalance is triggered by any membership change (join or leave). There is no separate rebalance RPC; the coordinator signals existing members via the `Heartbeat` response and they re-join to receive their new assignment. This is a stop-the-world rebalance: all members pause, re-join, then resume.
 
@@ -26,12 +26,12 @@ sequenceDiagram
     Note over GC: Assign member_id = "m-uuid-3".<br/>New sorted member list: [m-uuid-1, m-uuid-2, m-uuid-3].<br/>Recompute range assignment (8 partitions, 3 members):<br/>  m-uuid-1 → orders/[0..2], payments/[0,1]  (3 orders + 2 payments)<br/>  m-uuid-2 → orders/[3..5], payments/[2,3]  (3 orders + 2 payments)<br/>  m-uuid-3 → orders/[6,7]                  (2 orders, payments exhausted)<br/>new_generation_id = 3
 
     GC->>+RH: SyncProposeMetadata(JoinConsumerGroupCmd{<br/>member={id="m-uuid-3",...}, new_assignment={...}, new_generation_id=3})
-    RH->>MFSM: Update - committed
+    RH->>MFSM: Update — committed
     MFSM-->>RH: generationID=3
     RH-->>-GC: ok
 
     GC-->>-DAPI: JoinGroupResult{member_id="m-uuid-3", generation_id=3,<br/>assignments=[{topic="orders", partitions=[6,7]}]}
-    DAPI-->>-C3: JoinGroupResponse (OK) - C3 now fetching orders/6,7
+    DAPI-->>-C3: JoinGroupResponse (OK) — C3 now fetching orders/6,7
 
     Note over C1,C2: C1 and C2 are still polling with generationID=2.<br/>They learn of the rebalance on their next heartbeat.
 
@@ -58,7 +58,7 @@ sequenceDiagram
     DAPI->>+GC: JoinGroup(ctx, req)
     Note over GC: m-uuid-1 already in Members (re-join). No new member added.<br/>generation_id already=3. No membership change → GenerationID stays 3.<br/>Return existing assignment for m-uuid-1.
     GC-->>-DAPI: JoinGroupResult{member_id="m-uuid-1", generation_id=3,<br/>assignments=[{topic="orders", partitions=[0,1,2]},{topic="payments",partitions=[0,1]}]}
-    DAPI-->>-C1: JoinGroupResponse (OK) - C1 resumes with reduced assignment
+    DAPI-->>-C1: JoinGroupResponse (OK) — C1 resumes with reduced assignment
 
     Note over C2: Same re-join flow for C2 (omitted for brevity).<br/>C2 receives: orders/[3,4,5], payments/[2,3].
 
@@ -80,12 +80,12 @@ sequenceDiagram
 
     Note over Sweep: m-uuid-1 has not heartbeated for 35s (timeout=30s).
 
-    Sweep->>+GC: checkSessions() - evict m-uuid-1
+    Sweep->>+GC: checkSessions() — evict m-uuid-1
 
     Note over GC: Recompute assignment without m-uuid-1.<br/>Remaining: [m-uuid-2].<br/>m-uuid-2 gets all partitions.<br/>new_generation_id = 4.
 
     GC->>+RH: SyncProposeMetadata(LeaveConsumerGroupCmd{<br/>member_id="m-uuid-1", reason=SessionTimeout,<br/>new_assignment={"m-uuid-2": [orders/0..7, payments/0..3]},<br/>new_generation_id=4})
-    RH->>MFSM: Update - committed
+    RH->>MFSM: Update — committed
     MFSM-->>RH: ok
     RH-->>-GC: ok
     GC-->>-Sweep: done
@@ -121,7 +121,7 @@ sequenceDiagram
     MFSM-->>RH: GroupState{members=[m-uuid-1,...], generationID=3, assignments={...}}
     RH-->>GC: *GroupState
 
-    Note over GC: m-uuid-1 is already a member at generationID=3.<br/>Topics match. No change needed.<br/>No Raft command - return current assignment directly.
+    Note over GC: m-uuid-1 is already a member at generationID=3.<br/>Topics match. No change needed.<br/>No Raft command — return current assignment directly.
 
     GC-->>-C: JoinGroupResponse{member_id="m-uuid-1", generation_id=3,<br/>assignments=[current assignment for m-uuid-1]}
 ```

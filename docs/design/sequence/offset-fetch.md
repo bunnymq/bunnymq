@@ -1,6 +1,6 @@
 # Sequence: Offset Fetch
 
-Retrieves committed offsets for a set of `(topic, partition)` pairs from the Metadata FSM. Read-only - no Raft round-trip.
+Retrieves committed offsets for a set of `(topic, partition)` pairs from the Metadata FSM. Read-only — no Raft round-trip.
 
 ---
 
@@ -23,7 +23,7 @@ sequenceDiagram
     GC->>+RH: LookupMetadata(QueryGetGroupOffsets{<br/>group_id="shipping-svc",<br/>partitions=[orders/0, orders/1, orders/2, payments/0]})
 
     RH->>+MFSM: Lookup(QueryGetGroupOffsets{...})
-    Note over MFSM: Read GroupState.Offsets for "shipping-svc".<br/>No Raft round-trip - ReadLocalNode.
+    Note over MFSM: Read GroupState.Offsets for "shipping-svc".<br/>No Raft round-trip — ReadLocalNode.
     MFSM-->>-RH: {orders/0→145, orders/1→201, orders/2→51, payments/0→88}
     RH-->>-GC: offset map
 
@@ -103,7 +103,7 @@ sequenceDiagram
 
     MAPI-->>-Admin: FetchCommittedOffsetsResponse{offsets={orders/0→145, ..., payments/3→-1}}
 
-    Note over Admin: For lag: call GetOffsets(LATEST) per partition<br/>then compute lag = latest_offset − committed_offset.<br/>(Not automated in v1 - operator does this externally.)
+    Note over Admin: For lag: call GetOffsets(LATEST) per partition<br/>then compute lag = latest_offset − committed_offset.<br/>(Not automated in v1 — operator does this externally.)
 ```
 
 ---

@@ -1,4 +1,4 @@
-# 09 - Metrics & Logging
+# 09 — Metrics & Logging
 
 BunnyMQ's observability layer has two independent concerns: structured logging (per-event textual narrative) and metrics (numeric time-series). Logging uses `go.uber.org/zap` emitting newline-delimited JSON to stdout; the process supervisor or container runtime is responsible for capturing and shipping log output. Metrics use `github.com/prometheus/client_golang` and are scraped via a dedicated HTTP endpoint; no push gateway is used. A `net/http/pprof` endpoint is available behind an opt-in flag for CPU and heap profiling during development and incident investigation.
 
@@ -8,7 +8,7 @@ BunnyMQ's observability layer has two independent concerns: structured logging (
 
 ### 1.1 Library choice
 
-`go.uber.org/zap` - specifically the `zap.Logger` type, not the `sugaredLogger` wrapper. Rationale:
+`go.uber.org/zap` — specifically the `zap.Logger` type, not the `sugaredLogger` wrapper. Rationale:
 
 - Allocates zero heap objects per log call at `Info` and above when the level is enabled (important on the hot `Update()` path in the Partition FSM, though logging there is disabled at `Debug`).
 - Structured fields are typed (`zap.String`, `zap.Int64`, etc.), not `interface{}`, so field encoding is inlined without reflection.
@@ -94,7 +94,7 @@ Every log event must include these fields. Module-scope fields (`module`, `node_
 | `info` | Snapshot recovered (metadata FSM) | `shard_id`, `snapshot_index` |
 | `info` | PartitionFSM opened | `shard_id`, `topic`, `partition_id`, `last_applied_index` |
 | `warn` | AssignPartitionLeader rejected: stale epoch | `shard_id`, `current_epoch`, `received_epoch` |
-| `error` | Storage.Append failed inside Update() - panicking | `shard_id`, `topic`, `partition_id`, `error` |
+| `error` | Storage.Append failed inside Update() — panicking | `shard_id`, `topic`, `partition_id`, `error` |
 | `debug` | Raft entry proposed | `shard_id`, `client_id` |
 
 dragonboat's own internal logging is passed through a dragonboat `ILogger` adapter that routes at `debug` level; it is suppressed in production by setting the root level to `info`.
@@ -116,10 +116,10 @@ dragonboat's own internal logging is passed through a dragonboat `ILogger` adapt
 
 ### 2.1 Library
 
-`github.com/prometheus/client_golang` - the official Go Prometheus client. Specifically:
+`github.com/prometheus/client_golang` — the official Go Prometheus client. Specifically:
 
-- `prometheus.NewRegistry()` - a non-global registry. The default global registry (`prometheus.DefaultRegisterer`) is not used; all metrics are registered against an explicit registry so that tests can instantiate isolated registries without cross-contamination.
-- `promhttp.HandlerFor(registry, promhttp.HandlerOpts{})` - serves `/metrics` from the explicit registry.
+- `prometheus.NewRegistry()` — a non-global registry. The default global registry (`prometheus.DefaultRegisterer`) is not used; all metrics are registered against an explicit registry so that tests can instantiate isolated registries without cross-contamination.
+- `promhttp.HandlerFor(registry, promhttp.HandlerOpts{})` — serves `/metrics` from the explicit registry.
 
 ### 2.2 Registry ownership
 
@@ -190,7 +190,7 @@ Labeled `{shard_id}` unless noted.
 | Metric name | Type | Labels | Description |
 |---|---|---|---|
 | `bunnymq_build_info` | Gauge | version, go_version, node_id, commit | Always 1; carries build metadata as labels |
-| `bunnymq_uptime_seconds` | Gauge | - | Seconds since the process started |
+| `bunnymq_uptime_seconds` | Gauge | — | Seconds since the process started |
 | `bunnymq_grpc_requests_total` | Counter | method, code | RPC requests by method and gRPC status code |
 | `bunnymq_grpc_request_duration_seconds` | Histogram | method | End-to-end handler latency; buckets: 500µs, 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s |
 

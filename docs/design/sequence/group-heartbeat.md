@@ -1,6 +1,6 @@
-# Sequence: Consumer Group - Heartbeat
+# Sequence: Consumer Group — Heartbeat
 
-Heartbeat RPCs keep the member's session alive and deliver rebalance signals. In the normal (healthy) path there is no Raft round-trip - the coordinator responds from in-memory state. A Raft write occurs only when the session timeout sweep evicts a stale member.
+Heartbeat RPCs keep the member's session alive and deliver rebalance signals. In the normal (healthy) path there is no Raft round-trip — the coordinator responds from in-memory state. A Raft write occurs only when the session timeout sweep evicts a stale member.
 
 ---
 
@@ -18,7 +18,7 @@ sequenceDiagram
 
     DAPI->>+GC: Heartbeat(ctx, req)
 
-    Note over GC: Fast path - no Raft I/O.
+    Note over GC: Fast path — no Raft I/O.
     GC->>GC: lastHeartbeatMu.Lock()<br/>lastHeartbeat["shipping-svc"]["m-uuid-1"] = now<br/>lastHeartbeatMu.Unlock()
 
     GC->>GC: currentGenerationID = 2 (read from cached FSM view)<br/>rebalance_required = (2 > 2) = false
@@ -112,7 +112,7 @@ sequenceDiagram
 
     GC->>+RH: SyncProposeMetadata(LeaveConsumerGroupCmd{<br/>group_id="shipping-svc",<br/>member_id="m-uuid-1",<br/>reason=SessionTimeout})
 
-    RH->>MFSM: Update([LeaveConsumerGroupCmd]) - quorum committed
+    RH->>MFSM: Update([LeaveConsumerGroupCmd]) — quorum committed
     Note over MFSM: Remove m-uuid-1 from Members.<br/>Recompute assignment for remaining members.<br/>GenerationID++ (3 → 4).<br/>Store new Assignments.
     MFSM-->>RH: generationID=4
     RH-->>-GC: ok
@@ -130,5 +130,5 @@ sequenceDiagram
 
 - **No Raft I/O on healthy heartbeat.** The coordinator reads `currentGenerationID` from a cached view of the FSM (updated whenever a metadata write commits). For v1 this cache is a field on the `GroupCoordinator` struct updated in the `SyncProposeMetadata` callback. VERIFY: dragonboat IStateMachine does not have an explicit update callback; the coordinator re-reads with a `LookupMetadata` only when the generation ID check would benefit from freshness. In practice the coordinator always has the current generation because it was the one who proposed the last membership change.
 - **Heartbeat RPC does not include the committed offset.** Offset management is a separate concern (`CommitOffset` RPC). The heartbeat only signals liveness.
-- **`generation_id` in heartbeat request.** The client sends its last-known `generation_id`. If `server_generation > client_generation`, `rebalance_required=true`. The server does not return the current generation in the heartbeat response - the client learns the new generation by re-issuing `JoinGroup`.
-- **Concurrent sweep and heartbeat.** The sweep goroutine and heartbeat handlers both access `lastHeartbeat` - protected by `lastHeartbeatMu`. The sweep acquires `RLock` for iteration and upgrades to `Lock` only to delete an evicted entry (the upgrade is not atomic; the sweep re-checks the elapsed time under `Lock` before deleting to avoid TOCTOU).
+- **`generation_id` in heartbeat request.** The client sends its last-known `generation_id`. If `server_generation > client_generation`, `rebalance_required=true`. The server does not return the current generation in the heartbeat response — the client learns the new generation by re-issuing `JoinGroup`.
+- **Concurrent sweep and heartbeat.** The sweep goroutine and heartbeat handlers both access `lastHeartbeat` — protected by `lastHeartbeatMu`. The sweep acquires `RLock` for iteration and upgrades to `Lock` only to delete an evicted entry (the upgrade is not atomic; the sweep re-checks the elapsed time under `Lock` before deleting to avoid TOCTOU).
