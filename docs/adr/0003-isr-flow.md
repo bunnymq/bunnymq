@@ -131,7 +131,7 @@ sequenceDiagram
                                                                                                                                                        
       P->>NET: ProduceRequest(topic, partition, records)                                                                                               
       NET->>RM: appendRecords()                                                                                                                        
-      RM->>RM: UnifiedLog.append() → LEO растёт
+      RM->>RM: UnifiedLog.append() → LEO растет
       RM->>AQ: actionQueue.add { checkAndComplete(key) }                                                                                               
       Note over AQ: ActionQueue — очередь отложенных<br/>действий, выполняется после append                                                            
                                                                                                                                                        
@@ -147,7 +147,7 @@ sequenceDiagram
       NET-->>C: FetchResponse (с новыми данными)                                                                                                       
                                                                                                                                                        
       alt Данные так и не пришли за 500ms                                                                                                              
-          TM->>TM: bucket истёк → TimerTask.run()                                                                                                      
+          TM->>TM: bucket истек → TimerTask.run()                                                                                                      
           TM->>PG: delayedFetch.forceComplete()                                                                                                        
           PG->>RM: onComplete(): readFromLog() → пустой ответ                                                                                          
           RM->>NET: responseCallback(empty)                                                                                                            

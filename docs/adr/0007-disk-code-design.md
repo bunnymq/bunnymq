@@ -112,7 +112,7 @@ Recovery
       hadCleanShutdown.set(true);                                                                                                     
   }                                                                                                                                   
                                                                                                                                       
-  Файл удаляется до начала загрузки — если брокер упадёт в процессе recovery, следующий старт будет считаться unclean.                
+  Файл удаляется до начала загрузки — если брокер упадет в процессе recovery, следующий старт будет считаться unclean.                
                                                                                                                                       
   ---             
   2. Checkpoint файлы                                                                                                                 
@@ -127,7 +127,7 @@ Recovery
   ---             
   3. Параллельная загрузка — LogManager.loadLogs()
                                                                                                                                       
-  Строки 625–710. На каждую data-директорию создаётся thread pool размером numRecoveryThreadsPerDataDir. Каждая партиция загружается
+  Строки 625–710. На каждую data-директорию создается thread pool размером numRecoveryThreadsPerDataDir. Каждая партиция загружается
   параллельно через loadLog() → LogLoader.load().                                                                                     
                   
   ---                                                                                                                                 
@@ -149,7 +149,7 @@ Recovery
   - Проверяет наличие парного index файла
   - Вызывает segment.sanityCheck() — при ошибке (CorruptIndexException, NoSuchFileException) запускает recoverSegment(segment)        
                                                                                                                               
-  Весь проход 4 обёрнут в retryOnOffsetOverflow — при обнаружении legacy сегмента с переполнением offset'а сегмент разбивается        
+  Весь проход 4 обернут в retryOnOffsetOverflow — при обнаружении legacy сегмента с переполнением offset'а сегмент разбивается        
   (splitOverflowedSegment) и загрузка повторяется с нуля.                                                                             
                                                                                                                                       
   ---                                                                                                                                 
@@ -192,7 +192,7 @@ Recovery
                                                                                                                                       
   UnifiedLog.java:2534. Вызывается после всего recovery.
                                                                                                                                       
-  - Clean shutdown без snapshots (первый старт после апгрейда): создаёт пустые snapshots для двух последних сегментов — избегает      
+  - Clean shutdown без snapshots (первый старт после апгрейда): создает пустые snapshots для двух последних сегментов — избегает      
   полного сканирования                                                                                                                
   - Обычный путь: загружает из ближайшего .snapshot файла, дочитывает записи от snapshot.offset до LEO                                
                                                                                                                                       

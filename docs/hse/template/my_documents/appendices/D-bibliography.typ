@@ -22,5 +22,4 @@
 + gRPC Documentation. [Электронный ресурс]. --- URL:~https://grpc.io/docs/ (дата обращения: 26.04.2026).
 + Protocol Buffers Documentation. Версия proto3. [Электронный ресурс]. --- URL:~https://protobuf.dev/ (дата обращения: 26.04.2026).
 + Kreps J., Narkhede N., Rao J. Kafka: a Distributed Messaging System for Log Processing. NetDB '11, 2011. [Электронный ресурс]. --- URL:~https://notes.stephenholiday.com/Kafka.pdf (дата обращения: 26.04.2026).
-+ Uber go/zap. Blazing fast, structured, leveled logging in Go. [Электронный ресурс]. --- URL:~https://github.com/uber-go/zap (дата обращения: 26.04.2026).
 + Prometheus Documentation. [Электронный ресурс]. --- URL:~https://prometheus.io/docs/ (дата обращения: 26.04.2026).
