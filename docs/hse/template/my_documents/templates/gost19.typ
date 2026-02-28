@@ -106,6 +106,17 @@
   ]
 }
 
+// ─── Листинг с подписью по ГОСТ ──────────────────────────────
+#let gost-listing(num: "", caption: "", content) = {
+  block(sticky: true, width: 100%)[
+    #text(size: _small-size)[Листинг #num --- #caption]
+    #v(3pt)
+  ]
+  block(breakable: true, width: 100%)[
+    #content
+  ]
+}
+
 // ─── Рисунок с подписью по ГОСТ ──────────────────────────────
 #let gost-figure(num: "", caption: "", content) = {
   block(width: 100%)[
