@@ -24,7 +24,7 @@
   year:           "2026",
   show-toc:       true,
   show-lu:        true,
-  show-title-page: true,
+  show-title-page: sys.inputs.at("show-title-page", default: "true") != "false",
   show-change-log: true,
   annotation: [
     Настоящий документ «Пояснительная записка» разработан в соответствии с ГОСТ~19.404–79 и содержит обоснование технических решений, принятых при разработке программного изделия «Очередь сообщений на языке Go с гарантиями доставки и горизонтальным масштабированием» (BunnyMQ).
