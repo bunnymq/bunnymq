@@ -41,7 +41,7 @@ tp: $(BUILD_DIR)/Текст_Программы_Багавиев_БА.pdf
 $(BUILD_DIR)/Текст_Программы_Багавиев_БА.pdf: text-programmy/main.typ templates/gost19.typ | $(BUILD_DIR)
 	typst compile --root . text-programmy/main.typ $(BUILD_DIR)/Текст_Программы_Багавиев_БА.pdf
 
-pmi: $(BUILD_DIR)/pmi.pdf
+pmi: $(BUILD_DIR)/ПМИ_Багавиев_БА.pdf
 
 $(BUILD_DIR)/ПМИ_Багавиев_БА.pdf: pmi/main.typ templates/gost19.typ | $(BUILD_DIR)
 	typst compile --root . pmi/main.typ $(BUILD_DIR)/ПМИ_Багавиев_БА.pdf
