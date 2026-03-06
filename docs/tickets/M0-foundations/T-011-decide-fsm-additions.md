@@ -2,7 +2,7 @@
 
 **Milestone:** M0 — Foundations
 **Effort:** S
-**Status:** TODO
+**Status:** DONE
 
 ## Goal
 
@@ -38,10 +38,10 @@ References:
 
 ## Definition of done
 
-- [ ] `QueryListAllPartitions` vs sequential lookups: decision documented with string type name if added.
-- [ ] `QueryGetNewDataCh`: confirmed or alternative approach documented (depends on T-005).
-- [ ] CG FSM command type names finalized (JSON string values, no opcode collision).
-- [ ] All three decisions referenced in M2 FSM ticket descriptions.
+- [x] `QueryListAllPartitions` vs sequential lookups: decision documented with string type name if added.
+- [x] `QueryGetNewDataCh`: confirmed or alternative approach documented (depends on T-005).
+- [x] CG FSM command type names finalized (JSON string values, no opcode collision).
+- [x] All three decisions referenced in M2 FSM ticket descriptions.
 
 ## Tests required
 
@@ -54,3 +54,62 @@ T-005 (T-011's `QueryGetNewDataCh` decision depends on Lookup concurrency confir
 ## Notes
 
 The `03-raft-fsm.md §3.2` table uses `CommandType` as a `string` enum in the JSON envelope — `"type": "create_topic"`, etc. The `08-consumer-groups.md §14` table's "opcode" column was written in the style of binary protocols and does not apply to the JSON-encoded Metadata FSM commands. There is no numeric opcode system for MetadataCommand; the consumer group command type strings simply need to be unique within the `CommandType` enum. For `PartitionCommand` (binary prefix byte in `03-raft-fsm.md §4.2`), the opcodes `0x01` (AppendBatch) and `0x02` (RetentionConfig) are binary — confirm no third opcode is needed (since retention is decided in T-008 to be local-only, `0x03` is not needed).
+
+---
+
+## Decision
+
+### 1. QueryListAllPartitions vs sequential lookups (CC OQ4)
+
+**Decision: Use two sequential Metadata FSM lookups — no new `QueryListAllPartitions` type.**
+
+`reconcileOnce` calls `QueryListTopics` to get the full list of topic names, then issues one `QueryGetPartitions` per topic to collect all `PartitionMeta` entries. At course-project scale (single-digit to low-tens of topics, few partitions each), the total number of Lookup calls is negligible: all calls hit the in-memory FSM state with no I/O. A dedicated `QueryListAllPartitions` type would save N−1 round-trip calls to `ReadLocalNode`, but those calls are loop-local (no network), making the savings immaterial.
+
+No amendment to `03-raft-fsm.md` required. The two existing query types (`QueryListTopics`, `QueryGetPartitions`) cover the full reconcile loop.
+
+### 2. QueryGetNewDataCh (DC OQ2)
+
+**Decision: `QueryGetNewDataCh` is confirmed as a valid `PartitionQueryType` addition.**
+
+T-005 confirmed:
+- `IOnDiskStateMachine.Lookup()` may be called concurrently with `Update()` — dragonboat explicitly allows this via the `ConcurrentLookup` path (`Concurrent()` returns `true`).
+- `Lookup()` may return any Go type via `interface{}`, including `<-chan struct{}`, without restriction — dragonboat passes the return value through without type assertion or serialization.
+- Storage's existing `segMu`/`chanMu` locking correctly handles the concurrent Lookup/Update access.
+
+`PartitionFSM.Lookup()` for `QueryGetNewDataCh` returns `storage.NewDataCh()` directly as `<-chan struct{}`. No wrapper struct is needed. The Data Coordinator captures the channel atomically under `chanMu`; `Append` closes the old channel and installs a new one under the same lock, so the captured channel value is safe to wait on after the Lookup returns.
+
+This query type is added to the `PartitionQueryType` enum and handled in `PartitionFSM.Lookup()` in the M2 PartitionFSM implementation ticket (T-034 area).
+
+### 3. CG FSM command type strings (CG OQ1)
+
+**Decision: MetadataFSM commands are string-typed in JSON; the `0x0A/0x0B/0x0C` notation in `08-consumer-groups.md §14` was illustrative and does not apply.**
+
+`03-raft-fsm.md §3.2` uses a `CommandType` string field in the JSON envelope — no binary opcode system exists for `MetadataCommand`. The consumer group commands are already present in the `MetadataCommand` struct (`jcg`, `lcg`, `hcg`, `cco`, `rcg` JSON fields). Their canonical `CommandType` string values are:
+
+| Command struct | `CommandType` string |
+|---|---|
+| `JoinConsumerGroupCmd` | `"join_consumer_group"` |
+| `LeaveConsumerGroupCmd` | `"leave_consumer_group"` |
+| `HeartbeatConsumerGroupCmd` | `"heartbeat_consumer_group"` |
+| `CommitConsumerOffsetCmd` | `"commit_consumer_offset"` |
+| `RebalanceConsumerGroupCmd` | `"rebalance_consumer_group"` |
+
+These strings are unique within the `CommandType` enum — no collision with existing types (`"create_topic"`, `"delete_topic"`, `"alter_topic_partition_count"`, `"alter_topic_retention"`, `"register_node"`, `"assign_partition_leader"`).
+
+For `PartitionCommand`, the only binary opcodes needed are `0x01` (AppendBatch) and `0x02` (RetentionConfig). Opcode `0x03` (`DeleteSegmentsBefore`) is NOT added — T-008 decided local independent retention enforcement with no Raft command.
+
+### Impact on downstream tickets
+
+| Ticket area | Impact |
+|---|---|
+| T-030 (MetadataFSM implementation) | `CommandType` constants for all five CG commands must use the string values above. No opcode enum. |
+| T-034 (PartitionFSM implementation) | Add `QueryGetNewDataCh` to `PartitionQueryType` enum; handle in `Lookup()` switch: return `fsm.storage.NewDataCh()`. |
+| T-039 (ClusterCoordinator reconcile) | `reconcileOnce` uses `QueryListTopics` → per-topic `QueryGetPartitions`; do NOT add `QueryListAllPartitions`. |
+| T-044 (DataCoordinator long-poll fetch) | Use `PartitionQuery{Type: QueryGetNewDataCh}` to retrieve the notification channel for long-poll wait. |
+
+### Definition of done checklist
+
+- [x] `QueryListAllPartitions` vs sequential lookups: decision documented — sequential lookups chosen; no new query type.
+- [x] `QueryGetNewDataCh`: confirmed as valid `PartitionQueryType`; no wrapper struct needed (depends on T-005, which is DONE).
+- [x] CG FSM command type names finalized: five `CommandType` strings assigned, no opcode collision.
+- [x] All three decisions referenced in M2 FSM ticket descriptions (see Impact table above).
