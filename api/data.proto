@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package bunnymq.v1;
+
+import "common.proto";
+import "errors.proto";
+
+option go_package = "github.com/bunnymq/bunnymq/pkg/proto/v1;bunnymqv1";
+
+service DataService {
+  rpc Produce                (ProduceRequest)               returns (ProduceResponse);
+  rpc Fetch                  (FetchRequest)                 returns (FetchResponse);
+  rpc GetOffsets             (GetOffsetsRequest)            returns (GetOffsetsResponse);
+  rpc JoinGroup              (JoinGroupRequest)             returns (JoinGroupResponse);
+  rpc Heartbeat              (HeartbeatRequest)             returns (HeartbeatResponse);
+  rpc LeaveGroup             (LeaveGroupRequest)            returns (LeaveGroupResponse);
+  rpc CommitOffset           (CommitOffsetRequest)          returns (CommitOffsetResponse);
+  rpc FetchCommittedOffsets  (FetchCommittedOffsetsRequest) returns (FetchCommittedOffsetsResponse);
+}
+
+enum AcksMode {
+  ACKS_ALL  = 0;
+  ACKS_ZERO = 1;
+}
+
+message ProduceRequest {
+  string   topic        = 1;
+  int32    partition_id = 2;
+  AcksMode acks         = 3;
+  bytes    batch_data   = 4;
+}
+
+message ProduceResponse {
+  int32 partition_id = 1;
+  int64 offset       = 2;
+}
+
+message FetchRequest {
+  string topic        = 1;
+  int32  partition_id = 2;
+  int64  offset       = 3;
+  int32  max_bytes    = 4;
+  int64  max_wait_ms  = 5;
+}
+
+message FetchResponse {
+  bytes records     = 1;
+  int64 next_offset = 2;
+}
+
+enum OffsetQueryType {
+  EARLIEST     = 0;
+  LATEST       = 1;
+  BY_TIMESTAMP = 2;
+}
+
+message GetOffsetsRequest {
+  string          topic        = 1;
+  int32           partition_id = 2;
+  OffsetQueryType query_type   = 3;
+  int64           timestamp_ms = 4;
+}
+
+message GetOffsetsResponse {
+  int64 offset = 1;
+}
+
+message JoinGroupRequest {
+  string          group_id          = 1;
+  string          member_id         = 2;
+  repeated string subscribed_topics = 3;
+  string          client_host       = 4;
+}
+
+message JoinGroupResponse {
+  string                  member_id     = 1;
+  int32                   generation_id = 2;
+  repeated TopicPartition assignments   = 3;
+}
+
+enum HeartbeatStatus {
+  HEARTBEAT_OK                 = 0;
+  HEARTBEAT_REBALANCE_REQUIRED = 1;
+}
+
+message HeartbeatRequest {
+  string group_id      = 1;
+  string member_id     = 2;
+  int32  generation_id = 3;
+}
+
+message HeartbeatResponse {
+  HeartbeatStatus status = 1;
+}
+
+message LeaveGroupRequest {
+  string group_id  = 1;
+  string member_id = 2;
+}
+
+message LeaveGroupResponse {}
+
+message CommitOffsetRequest {
+  string                  group_id      = 1;
+  string                  member_id     = 2;
+  int32                   generation_id = 3;
+  repeated PartitionOffset offsets      = 4;
+}
+
+message PartitionOffsetError {
+  string         topic        = 1;
+  int32          partition_id = 2;
+  BunnyErrorCode error_code   = 3;
+}
+
+message CommitOffsetResponse {
+  repeated PartitionOffsetError errors = 1;
+}
+
+message FetchCommittedOffsetsRequest {
+  string                  group_id   = 1;
+  repeated TopicPartition partitions = 2;
+}
+
+message FetchCommittedOffsetsResponse {
+  repeated PartitionOffset offsets = 1;
+}
