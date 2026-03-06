@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-BunnyMQ is a Kafka-like distributed message broker written in Go. It is currently in the **implementation phase** — the design phase (sessions 1–4) is complete and produced detailed design documents in `docs/design/`. Ticket breakdown lives in `CLAUDE_pending_tickets.md`.
+BunnyMQ is a Kafka-like distributed message broker written in Go. It is currently in the **implementation phase** — the design phase (sessions 1–4) is complete and produced detailed design documents in `docs/design/`. The ticket breakdown and recommended implementation order live in `docs/tickets/README.md`.
 
 ## Commands
 
@@ -95,3 +95,74 @@ Storage
 - Index entries are **sparse** (written at a configurable byte sampling interval, not per-batch).
 - Read path: binary-search index → seek log file → linear scan to first matching batch → return up to `maxBytes`.
 - On crash recovery, the active segment is truncated to the last complete batch before loading.
+
+## Ticket workflow
+
+Each ticket maps to one PR. Use the `/ticket <number>` skill to implement a ticket end-to-end:
+
+```text
+/ticket 015          # implements T-015, opens a PR
+/ticket 047          # implements T-047, opens a PR
+```
+
+The skill will: find the ticket file → read design docs → check dependencies → create branch `ticket/T-NNN-slug` → implement + write tests → verify DoD → commit → open PR.
+
+**Before starting any ticket:**
+
+1. Confirm its dependencies (listed in the ticket's Dependencies section) are merged to `main`. If not, implement those first.
+2. For M0 VERIFY tickets (T-001–T-006): these are research tasks. Their output is a short written note in the ticket file. They do not produce Go code.
+
+**Branch naming:** `ticket/T-NNN-short-slug` (derived from the ticket filename).
+
+**Commit message format:**
+
+```text
+T-NNN: <ticket title>
+
+<one-sentence summary>
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+```
+
+## Coding standards
+
+### Go conventions
+
+- No comments that describe *what* the code does — use them only for non-obvious *why* (hidden constraint, subtle invariant, workaround for a specific bug).
+- No global loggers. Every module receives a `*zap.Logger` via its constructor. In tests use `zap.NewNop()`.
+- No global Prometheus registry. Every module receives a `prometheus.Registerer` and registers its own metrics. In tests use an isolated `prometheus.NewRegistry()` or the `NoopXxxMetrics()` helper.
+- Package names follow `01-modules.md`: `internal/storage`, `internal/cluster`, `internal/data`, `internal/api/management`, `internal/api/data`, `pkg/client`, etc.
+- Integration tests carry `//go:build integration` at the top; docker-backed tests carry `//go:build integration,docker`.
+
+### FSM rules (critical)
+
+- `PartitionFSM.Update()` must be **strictly deterministic**: no `time.Now()`, no network I/O, no randomness. Only Storage calls are allowed.
+- Retention is triggered by a Raft command (`DeleteSegmentsBefore`) so all replicas delete identical segments. Do not call storage retention from a local timer inside the FSM.
+- `MetadataFSM.Update()` stores pre-computed assignments sent in the command payload — it does not call `DescribeTopic` or any external service.
+
+### Error handling
+
+- Validate at system boundaries (user input, gRPC ingress, proto deserialization). Trust internal invariants.
+- Map domain errors to gRPC status codes in the API layer, not deeper. Domain packages return typed sentinel errors (`ErrNotFound`, `ErrStaleGeneration`, etc.).
+- `SyncPropose` failures that indicate a leader change return `ErrNotLeader`; map to `FAILED_PRECONDITION` with `BunnyErrorDetail{NOT_LEADER}`.
+
+### Tests
+
+- Every ticket's **Tests required** section lists exact test function names — implement all of them.
+- Use `zaptest/observer` (`go.uber.org/zap/zaptest/observer`) to assert on log output, not stdout capture.
+- Use table-driven tests for codec round-trips and error-mapping checks.
+- Stub `nodeHostIface` / `GroupCoordinatorIface` / `DataCoordinatorIface` in unit tests; use real processes only in `integration`-tagged tests.
+
+## VERIFY items (resolve in M0 before implementing M1+)
+
+Five dragonboat v4 API questions must be answered before the first Raft code is written. Each has its own ticket (T-001–T-006). Resolution is a short written note; no Go code required.
+
+| Ticket | Question |
+| ------ | -------- |
+| T-001 | `IOnDiskStateMachine.SaveSnapshot` goroutine relationship with `Update` |
+| T-002 | `GetLeaderID(shardID)` signature and `valid=false` semantics during election |
+| T-003 | `StartCluster(join=false)` vs `join=true` for multi-node bootstrap |
+| T-005 | `IStateMachine.Lookup` thread-safety with concurrent `Update` |
+| T-006 | Propose error codes on leader change (`ErrNotLeader` vs gRPC status) |
+
+These answers affect T-024, T-030, T-031, T-039, T-040, T-052, and T-054. Getting them wrong early means rework in multiple later tickets.
