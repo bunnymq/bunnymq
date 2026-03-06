@@ -50,3 +50,65 @@ None.
 ## Notes
 
 For per-record size validation: the 4 MiB batch limit already caps damage from oversized batches (a single oversized record would consume the full batch budget). Server-side per-record validation adds latency on every produce RPC and complicates the batch validation step. Recommend: skip per-record server-side validation in v1; document as a known limitation. For `request_id` key: `bunnymq-request-id` is more consistent with the existing authentication header naming convention.
+
+---
+
+## Decision
+
+### 1. `partition_id = -1` routing (OQ4)
+
+**Decision: DataCoordinator owns the round-robin counter; counter is not persisted.**
+
+- `DataCoordinator` maintains a `map[string]*atomic.Int64` keyed by topic name. Each entry is created lazily on the first `partition_id = -1` produce request for that topic.
+- The selected partition index is `counter.Add(1) % partitionCount`. `partitionCount` is fetched from the MetadataFSM via `LookupMetadata(QueryGetTopic)` at produce time.
+- The counter resets to zero on server restart. This is acceptable for a course-project load balancer: no consumer or producer protocol depends on round-robin stability, and Raft provides durability at the log level regardless of which partition receives a batch.
+- Key-hash-based routing is explicitly out of scope in v1 because the routing key is embedded inside the opaque `batch_data` bytes, which would require decoding on the hot path.
+
+Rationale:
+1. Keeping the counter in DataCoordinator avoids any Raft involvement for what is purely a load-distribution hint.
+2. `atomic.Int64` makes the counter safe for concurrent produce requests without a mutex.
+3. Non-persistent round-robin state is consistent with Kafka's producer-side default behavior (producers maintain their own sequence number).
+
+---
+
+### 2. Per-record size validation (§10 VERIFY)
+
+**Decision: No server-side per-record size validation in v1.**
+
+The existing four-step batch validation (length ≥ 38, `batch_length` bounds, 4 MiB cap, CRC-32C) is sufficient:
+
+- A single oversized record within a 4 MiB batch is bounded in damage: at most 4 MiB stored and replicated per produce call.
+- Adding per-record validation requires iterating all records in every batch on the produce hot path — O(records_per_batch) overhead on every RPC.
+- It complicates the `DataAPI` handler by coupling it to the wire record format (offset within `batch_data` where records start).
+- The 1 MiB per-record limit is enforced in the client library (`pkg/client`), which is the appropriate boundary for a trusted internal cluster.
+
+Known limitation: a buggy or malicious client that bypasses `pkg/client` can submit a record up to ~4 MiB. This is documented as a v2 improvement.
+
+---
+
+### 3. `request_id` metadata key (OQ5)
+
+**Decision: Use `bunnymq-request-id` as the gRPC metadata key.**
+
+- Consistent with the existing `bunnymq-auth-token` header convention — all BunnyMQ-specific metadata keys share the `bunnymq-` prefix.
+- Clients that already use `x-request-id` (e.g., from an HTTP gateway) can add a gateway header-rewrite rule; this is a one-line mapping and does not require a protocol change.
+- The logging interceptor reads `md["bunnymq-request-id"]`; if absent, generates or omits a request ID from log fields.
+
+---
+
+### Impact on downstream tickets
+
+| Ticket | Impact |
+|---|---|
+| T-037 (Data API gRPC — Produce + GetOffsets) | Logging interceptor must read `bunnymq-request-id` from incoming metadata. |
+| T-041 (DataCoordinator: produce path + offset queries) | `DataCoordinator` must hold `map[string]*atomic.Int64` round-robin counters; fetch `partitionCount` from MetadataFSM via `LookupMetadata(QueryGetTopic)` before computing `counter.Add(1) % partitionCount`. |
+
+No amendments to immutable design documents are required.
+
+---
+
+### Definition of done checklist
+
+- [x] `partition_id=-1` routing: DataCoordinator counter ownership, reset behavior, and LookupMetadata call location documented.
+- [x] Per-record size validation: decision documented — deferred to client library in v1; batch-level 4 MiB cap is the server-side guard.
+- [x] `request_id` metadata key name finalized: `bunnymq-request-id`.
