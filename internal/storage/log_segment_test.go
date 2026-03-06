@@ -22,7 +22,7 @@ func TestLogSegment_AppendRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenLogSegment: %v", err)
 	}
-	defer seg.Close()
+	t.Cleanup(func() { _ = seg.Close() })
 
 	b1 := makeTestBatch(t, "hello")
 	b2 := makeTestBatch(t, "world")
@@ -61,7 +61,7 @@ func TestLogSegment_AppendReturnsPosition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenLogSegment: %v", err)
 	}
-	defer seg.Close()
+	t.Cleanup(func() { _ = seg.Close() })
 
 	b1 := makeTestBatch(t, "first")
 
@@ -91,7 +91,7 @@ func TestLogSegment_ScanFrom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenLogSegment: %v", err)
 	}
-	defer seg.Close()
+	t.Cleanup(func() { _ = seg.Close() })
 
 	batches := [][]byte{
 		makeTestBatch(t, "a"),
@@ -135,7 +135,7 @@ func TestLogSegment_ScanFrom_PartialStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenLogSegment: %v", err)
 	}
-	defer seg.Close()
+	t.Cleanup(func() { _ = seg.Close() })
 
 	b1 := makeTestBatch(t, "first")
 	b2 := makeTestBatch(t, "second")
@@ -181,7 +181,7 @@ func TestLogSegment_Truncate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenLogSegment: %v", err)
 	}
-	defer seg.Close()
+	t.Cleanup(func() { _ = seg.Close() })
 
 	b1 := makeTestBatch(t, "keep")
 	b2 := makeTestBatch(t, "discard")
@@ -222,18 +222,19 @@ func TestLogSegment_ReadOnlyRejectsAppend(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "00000000000000000000.log")
 
-	// Create an empty file first so read-only open works.
 	f, err := OpenLogSegment(path, 0, true)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 
 	seg, err := OpenLogSegment(path, 0, false)
 	if err != nil {
 		t.Fatalf("OpenLogSegment read-only: %v", err)
 	}
-	defer seg.Close()
+	t.Cleanup(func() { _ = seg.Close() })
 
 	_, err = seg.Append(makeTestBatch(t, "x"))
 	if err != ErrSegmentReadOnly {
@@ -249,7 +250,7 @@ func TestLogSegment_Sync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenLogSegment: %v", err)
 	}
-	defer seg.Close()
+	t.Cleanup(func() { _ = seg.Close() })
 
 	if _, err := seg.Append(makeTestBatch(t, "sync-test")); err != nil {
 		t.Fatalf("Append: %v", err)

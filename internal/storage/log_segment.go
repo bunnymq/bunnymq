@@ -38,7 +38,7 @@ func OpenLogSegment(path string, baseOffset int64, create bool) (*LogSegment, er
 
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 
