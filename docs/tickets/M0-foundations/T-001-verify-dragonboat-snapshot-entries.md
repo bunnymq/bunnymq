@@ -46,3 +46,62 @@ None.
 ## Notes
 
 Look at `github.com/lni/dragonboat/v4/config` package. The field is `config.Config.SnapshotEntries uint64`. Check whether there is any `sanityCheck()` or `validate()` function called during `NodeHost.StartCluster` that validates this field. Also verify that `CompactionOverhead` set to `1 << 62` does not conflict with `SnapshotEntries`.
+
+---
+
+## Resolution
+
+**Investigated:** dragonboat v4 source (`config/config.go`, `config/validator.go`, `nodehost.go`) via GitHub (lni/dragonboat, v4 branch).
+
+### Finding 1 — `SnapshotEntries = 1 << 62` is accepted, but `0` is the correct disable mechanism
+
+dragonboat v4's `Config.Validate()` performs **no bounds check** on `SnapshotEntries` or `CompactionOverhead`. The only snapshot-related guard is:
+
+```go
+if c.IsWitness && c.SnapshotEntries > 0 {
+    return errors.New("witness node can not take snapshot")
+}
+```
+
+So `SnapshotEntries = 1 << 62` does not panic or return a validation error for regular (non-witness) nodes. However, the dragonboat-documented mechanism to disable automatic snapshots is:
+
+> "Once automatic snapshotting is disabled by setting the `SnapshotEntries` field to **0**, users can still use `NodeHost.RequestSnapshot` or `SyncRequestSnapshot` to manually request snapshots."
+
+**Decision for partition shards:** Use `SnapshotEntries = 0` (the documented disable mechanism) rather than `1 << 62`. Both work, but `0` is idiomatic and avoids any hypothetical future overflow in index arithmetic (`index <= n.config.SnapshotEntries + applied`).
+
+### Finding 2 — `CompactionOverhead = 1 << 62` is accepted
+
+No bounds check exists for `CompactionOverhead`. The compaction logic uses comparison (`if index > n.config.CompactionOverhead`), so no arithmetic overflow occurs at runtime. However, since partition shards use `SnapshotEntries = 0` (no automatic snapshots), compaction is never triggered automatically, making `CompactionOverhead` irrelevant in practice for Strategy A.
+
+**Decision for partition shards:** Keep `CompactionOverhead = 0` (default). Additionally, `DisableAutoCompactions = true` can be set to make the intent explicit, though it has no functional effect when `SnapshotEntries = 0`.
+
+### Finding 3 — Metadata shard `SnapshotEntries = 10_000` is confirmed
+
+No upper-bound validation exists. `10_000` is a safe, reasonable value for the metadata shard and aligns with the design doc's proposal. It bounds restart replay to at most 10 000 metadata commands.
+
+**Decision for metadata shard:** `SnapshotEntries = 10_000`. No change from design doc proposal.
+
+### Constants for T-012 (`internal/raft/config.go`)
+
+```go
+const (
+    // PartitionSnapshotEntries disables automatic snapshots on partition shards
+    // (Strategy A). dragonboat v4 treats 0 as "auto-snapshots off".
+    PartitionSnapshotEntries uint64 = 0
+
+    // PartitionCompactionOverhead is irrelevant when SnapshotEntries = 0
+    // (compaction is never triggered). Set to 0 (default).
+    PartitionCompactionOverhead uint64 = 0
+
+    // MetadataSnapshotEntries triggers a metadata snapshot every 10 000 committed
+    // entries, bounding restart replay time.
+    MetadataSnapshotEntries uint64 = 10_000
+)
+```
+
+### DoD checklist
+
+- [x] Accepted value for partition shard `SnapshotEntries` documented — use `0` (disable auto-snapshots).
+- [x] Accepted value for partition shard `CompactionOverhead` documented — use `0`; `DisableAutoCompactions = true` optional.
+- [x] Metadata shard `SnapshotEntries` value decided — confirmed `10_000`.
+- [x] Alternative mechanism identified — `SnapshotEntries = 0` is the documented disable path; `1 << 62` also accepted but non-idiomatic.
