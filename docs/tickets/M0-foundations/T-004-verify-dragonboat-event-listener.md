@@ -2,7 +2,7 @@
 
 **Milestone:** M0 — Foundations
 **Effort:** S
-**Status:** TODO
+**Status:** DONE
 
 ## Goal
 
@@ -27,11 +27,49 @@ References:
 
 - Implementing the event listener or the sweep — M3 ClusterCoordinator tickets.
 
+## Findings
+
+### Interface confirmed: yes
+
+dragonboat v4 exposes `raftio.IRaftEventListener` (package `github.com/lni/dragonboat/v4/raftio`):
+
+```go
+type IRaftEventListener interface {
+    LeaderUpdated(info LeaderInfo)
+}
+
+type LeaderInfo struct {
+    ShardID   uint64
+    ReplicaID uint64
+    Term      uint64
+    LeaderID  uint64  // raftio.NoLeader (0) when there is no leader / during election
+}
+```
+
+Registration is via `config.NodeHostConfig.RaftEventListener` (field type `raftio.IRaftEventListener`), set at `NodeHost` construction time before any shard is started.
+
+### Goroutine semantics
+
+NodeHost uses a **single dedicated goroutine** to invoke all `IRaftEventListener` methods sequentially (`config/config.go` comment: "NodeHost uses a single dedicated goroutine to invoke all RaftEventListener methods one by one"). CPU-intensive or IO operations must be offloaded to user-managed goroutines. Calling `SyncProposeMetadata` directly inside `LeaderUpdated` would block this goroutine and stall all subsequent leader-change callbacks for every shard — it must not be done.
+
+### Callback reliability
+
+`LeaderUpdated` fires on every leader change including stepdowns (where `LeaderID` is set to `raftio.NoLeader = 0`). It fires on every node that has the listener registered, not just the leader. Callbacks for distinct shards may interleave but are serialized through the single goroutine.
+
+### Recommendation: callback as primary + 30 s sweep as safety net
+
+Use `IRaftEventListener.LeaderUpdated` as the primary mechanism:
+- `LeaderUpdated` enqueues a `LeaderInfo` value on a buffered channel (capacity ≥ number of partition shards).
+- A dedicated goroutine drains the channel and calls `SyncProposeMetadata` with `AssignPartitionLeaderCmd`. Entries where `LeaderID == raftio.NoLeader` (election in progress) are silently dropped — the sweep will catch the resolved leader.
+- Retain the periodic sweep (`leaderSweepLoop`) as a safety net at **30 s** (not 3 s) to recover from any dropped or missed callbacks.
+
+This eliminates the up-to-3-second staleness window of the sweep-only approach and reduces unnecessary Raft proposals when leadership is stable.
+
 ## Definition of done
 
-- [ ] dragonboat v4 event listener availability confirmed (yes/no).
-- [ ] If available: interface name, method signature, and `LeaderInfo` fields documented.
-- [ ] Recommendation documented: callback + long-interval sweep vs sweep-only.
+- [x] dragonboat v4 event listener availability confirmed (yes/no).
+- [x] If available: interface name, method signature, and `LeaderInfo` fields documented.
+- [x] Recommendation documented: callback + long-interval sweep vs sweep-only.
 
 ## Tests required
 

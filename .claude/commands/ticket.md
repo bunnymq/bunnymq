@@ -32,7 +32,13 @@ For each ticket listed in the **Dependencies** section:
 
 ## Step 4 — Create a branch
 
-Create a branch named after the ticket file slug:
+Switch to main and pull the latest changes before branching:
+```
+git switch main
+git pull
+```
+
+Then create a branch named after the ticket file slug:
 ```
 git checkout -b ticket/T-$ARGUMENTS-<slug>
 ```
@@ -84,6 +90,7 @@ Push the branch and create a PR:
 ```
 git push -u origin ticket/T-$ARGUMENTS-<slug>
 gh pr create \
+  --assignee sunnyyssh \
   --title "T-$ARGUMENTS: <ticket title>" \
   --body "$(cat <<'EOF'
 ## Ticket
