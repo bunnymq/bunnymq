@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package bunnymq.v1;
+
+option go_package = "github.com/bunnymq/bunnymq/pkg/proto/v1;bunnymqv1";
+
+message TopicInfo {
+  string name               = 1;
+  int32  partition_count    = 2;
+  int32  replication_factor = 3;
+  int64  retention_ms       = 4;
+  int64  retention_bytes    = 5;
+  int64  created_at_ms      = 6;
+}
+
+message PartitionInfo {
+  int32           partition_id     = 1;
+  uint64          shard_id         = 2;
+  uint64          leader_node_id   = 3;
+  int64           leader_epoch     = 4;
+  repeated uint64 replica_node_ids = 5;
+}
+
+message PartitionInfoWithOffsets {
+  PartitionInfo info            = 1;
+  int64         earliest_offset = 2;
+  int64         latest_offset   = 3;
+}
+
+message NodeInfo {
+  uint64 node_id  = 1;
+  string address  = 2;
+}
+
+message TopicPartition {
+  string topic        = 1;
+  int32  partition_id = 2;
+}
+
+message PartitionOffset {
+  string topic        = 1;
+  int32  partition_id = 2;
+  int64  offset       = 3;
+}

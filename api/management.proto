@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package bunnymq.v1;
+
+import "common.proto";
+
+option go_package = "github.com/bunnymq/bunnymq/pkg/proto/v1;bunnymqv1";
+
+service ManagementService {
+  rpc CreateTopic          (CreateTopicRequest)          returns (CreateTopicResponse);
+  rpc DeleteTopic          (DeleteTopicRequest)          returns (DeleteTopicResponse);
+  rpc ListTopics           (ListTopicsRequest)           returns (ListTopicsResponse);
+  rpc DescribeTopic        (DescribeTopicRequest)        returns (DescribeTopicResponse);
+  rpc AlterTopicPartitions (AlterTopicPartitionsRequest) returns (AlterTopicPartitionsResponse);
+  rpc AlterTopicRetention  (AlterTopicRetentionRequest)  returns (AlterTopicRetentionResponse);
+  rpc DescribeCluster      (DescribeClusterRequest)      returns (DescribeClusterResponse);
+  rpc ListPartitions       (ListPartitionsRequest)       returns (ListPartitionsResponse);
+}
+
+message CreateTopicRequest {
+  string name               = 1;
+  int32  partition_count    = 2;
+  int32  replication_factor = 3;
+  int64  retention_ms       = 4;
+  int64  retention_bytes    = 5;
+}
+
+message CreateTopicResponse {
+  TopicInfo topic = 1;
+}
+
+message DeleteTopicRequest {
+  string name = 1;
+}
+
+message DeleteTopicResponse {}
+
+message ListTopicsRequest {}
+
+message ListTopicsResponse {
+  repeated TopicInfo topics = 1;
+}
+
+message DescribeTopicRequest {
+  string name = 1;
+}
+
+message DescribeTopicResponse {
+  TopicInfo              topic      = 1;
+  repeated PartitionInfo partitions = 2;
+}
+
+message AlterTopicPartitionsRequest {
+  string name                = 1;
+  int32  new_partition_count = 2;
+}
+
+message AlterTopicPartitionsResponse {}
+
+message AlterTopicRetentionRequest {
+  string name           = 1;
+  int64  retention_ms   = 2;
+  int64  retention_bytes= 3;
+}
+
+message AlterTopicRetentionResponse {}
+
+message DescribeClusterRequest {}
+
+message DescribeClusterResponse {
+  repeated NodeInfo nodes = 1;
+}
+
+message ListPartitionsRequest {
+  string topic = 1;
+}
+
+message ListPartitionsResponse {
+  repeated PartitionInfoWithOffsets partitions = 1;
+}
