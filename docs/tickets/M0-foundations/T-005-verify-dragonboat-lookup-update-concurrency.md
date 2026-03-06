@@ -2,7 +2,7 @@
 
 **Milestone:** M0 — Foundations
 **Effort:** S
-**Status:** TODO
+**Status:** DONE
 
 ## Goal
 
@@ -34,12 +34,64 @@ References:
 
 - Implementing Lookup/Update methods — M2 PartitionFSM tickets.
 
+## Findings
+
+### 1. Lookup/Update concurrency: **confirmed concurrent** for `IOnDiskStateMachine`
+
+dragonboat v4 source (`statemachine/disk.go`) documents this explicitly in the `IOnDiskStateMachine` type comment:
+
+> "An IOnDiskStateMachine type allows its Update method to be concurrently invoked when there are ongoing calls to the Lookup or the SaveSnapshot method."
+
+The `Update()` method comment adds:
+
+> "Concurrent calls to the Lookup method and the SaveSnapshot method are not blocked when the state machine is being updated by the Update method."
+
+The `Lookup()` method comment confirms the symmetric direction:
+
+> "Concurrent calls to the Update and RecoverFromSnapshot method are not blocked when calls to the Lookup method are being processed."
+
+**Internal mechanism** (`internal/rsm/adapter.go`): `OnDiskStateMachine.Concurrent()` returns `true`. In `internal/rsm/statemachine.go`, when `s.Concurrent()` is true the `Lookup` path calls `concurrentLookup` → `s.sm.ConcurrentLookup(query)` **without holding the internal `sync.RWMutex`**. For regular `IStateMachine`, the write lock guards `Update` and the read lock guards `Lookup` — so multiple Lookups are concurrent with each other but never with Update. `IOnDiskStateMachine` has no such mutex guard on its Lookup/Update pair.
+
+**Mutual exclusion that does exist**: `Update`, `Sync`, `PrepareSnapshot`, `RecoverFromSnapshot`, and `Close` are mutually exclusive with each other (guarded by an internal lock), but **Lookup** is excluded from this set and runs freely alongside `Update`.
+
+### 2. Channel return from Lookup: **safe, no restrictions**
+
+`Lookup(interface{}) (interface{}, error)` — Go's `interface{}` accepts any type. The dragonboat internal adapter (`OnDiskStateMachine.Lookup` in `internal/rsm/adapter.go`) passes the result directly through:
+
+```go
+func (s *OnDiskStateMachine) Lookup(query interface{}) (interface{}, error) {
+    s.ensureOpened()
+    return s.sm.Lookup(query)
+}
+```
+
+No type assertion, no serialization, no restriction is applied to the returned value. Returning a `<-chan struct{}` via `interface{}` is fully safe from dragonboat's perspective.
+
+### 3. Impact on Storage concurrency model
+
+The design assumption in `02-storage.md §8` (concurrent Lookup/Update access) is **correct**. Storage's existing `segMu` + `chanMu` locks are sufficient:
+
+- `Lookup` for `QueryGetNewDataCh` acquires `chanMu` to copy the current `newDataCh` reference, then returns it. Releasing `chanMu` before return is fine because the channel value itself is immutable after capture.
+- `Update` (via `Append`) acquires `segMu` then `chanMu`, appends data, creates a new channel, closes the old one, and releases both locks. No ordering conflict with Lookup.
+- Because Lookup and Update run concurrently, the FSM must NOT assume it holds any exclusive lock during Lookup — which the Storage design correctly handles.
+
+### 4. `QueryGetNewDataCh` PartitionQueryType: **safe to add**
+
+The long-poll fetch pattern documented in `05-data-coordinator.md §6.2` is confirmed as safe:
+
+1. DataCoordinator calls `nodeHost.ReadIndex` + `nodeHost.ReadLocalNode` (which invokes `Lookup`).
+2. `Lookup(QueryGetNewDataCh{})` returns `storage.NewDataCh()` — a snapshot of the current `<-chan struct{}`.
+3. DataCoordinator waits on the returned channel (or the `maxWaitMs` timer, whichever fires first).
+4. Concurrently, another goroutine calls `Update` which runs `Append`, closes the old channel, and creates a new one. The closed channel wakes the waiting DataCoordinator.
+
+No race condition exists because the channel value is captured atomically under `chanMu`, and closing a channel is safe to call once by exactly one goroutine (the `Append` path holds `chanMu` when it closes the old channel and replaces it).
+
 ## Definition of done
 
-- [ ] Lookup/Update concurrency behavior confirmed (concurrent or serialized) with dragonboat v4 source reference.
-- [ ] Channel-via-interface{} return safety confirmed or alternative approach documented.
-- [ ] If the design assumption (concurrent Lookup/Update) is wrong: impact on Storage concurrency model assessed and documented.
-- [ ] `QueryGetNewDataCh` PartitionQueryType confirmed as safe to add (pending this result).
+- [x] Lookup/Update concurrency behavior confirmed (concurrent or serialized) with dragonboat v4 source reference.
+- [x] Channel-via-interface{} return safety confirmed or alternative approach documented.
+- [x] If the design assumption (concurrent Lookup/Update) is wrong: impact on Storage concurrency model assessed and documented.
+- [x] `QueryGetNewDataCh` PartitionQueryType confirmed as safe to add (pending this result).
 
 ## Tests required
 
