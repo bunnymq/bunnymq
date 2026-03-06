@@ -9,7 +9,7 @@ import (
 // MetadataFSM implements dragonboat's IStateMachine for the cluster metadata shard.
 // It maintains in-memory state for topics, partitions, nodes, and consumer groups.
 type MetadataFSM struct {
-	state *MetadataState
+	state *MetadataState //nolint:unused
 }
 
 var _ sm.IStateMachine = (*MetadataFSM)(nil)

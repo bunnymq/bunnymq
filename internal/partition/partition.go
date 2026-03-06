@@ -12,9 +12,9 @@ import (
 // PartitionFSM implements dragonboat's IOnDiskStateMachine for a single partition shard.
 // It is a thin adapter: its state IS the Storage instance.
 type PartitionFSM struct {
-	stor             storage.Storage
-	lastAppliedIndex atomic.Uint64
-	sidecarPath      string
+	stor             storage.Storage //nolint:unused
+	lastAppliedIndex atomic.Uint64   //nolint:unused
+	sidecarPath      string          //nolint:unused
 }
 
 var _ sm.IOnDiskStateMachine = (*PartitionFSM)(nil)
