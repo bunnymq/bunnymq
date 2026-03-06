@@ -1,0 +1,23 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - gocyclo
+    - misspell
+  settings:
+    gocyclo:
+      min-complexity: 20
+    errcheck:
+      exclude-functions:
+        - "(*os.File).Write"
+        - "(*os.File).Sync"
+        - "(*os.File).WriteAt"
+        - "(math/rand.Rand).Read"
+
+issues:
+  exclude-dirs:
+    - pkg/proto/v1
