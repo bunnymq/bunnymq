@@ -1,10 +1,22 @@
 package storage
 
-import "errors"
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"os"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/bunnymq/bunnymq/internal/config"
+)
 
 var (
 	ErrOffsetOutOfRange  = errors.New("offset out of range")
 	ErrTimestampNotFound = errors.New("timestamp not found")
+	ErrStorageClosed     = errors.New("storage is closed")
 )
 
 // Storage is the persistence interface for a single partition replica.
@@ -55,37 +67,276 @@ type Storage interface {
 	Close() error
 }
 
-// FileStorage is a stub implementation of Storage backed by the segmented log.
-type FileStorage struct{}
-
-var _ Storage = (*FileStorage)(nil)
-
-func (s *FileStorage) Append(batch []byte) (int64, error) {
-	return 0, errors.New("not implemented")
+type storageImpl struct {
+	dir        string
+	segments   []*SegmentStorage
+	nextOffset int64
+	segMu      sync.RWMutex
+	newDataCh  chan struct{}
+	chanMu     sync.Mutex
+	config     *config.StorageConfig
+	retCancel  context.CancelFunc
+	retentionMs    atomic.Int64
+	retentionBytes atomic.Int64
+	closed         bool
+	closeMu        sync.Mutex
 }
 
-func (s *FileStorage) Read(offset int64, maxBytes int) ([]byte, int64, error) {
-	return nil, 0, errors.New("not implemented")
+var _ Storage = (*storageImpl)(nil)
+
+// Open enumerates and recovers segments in dir, starts the retention goroutine,
+// and returns a ready Storage.
+func Open(dir string, cfg *config.StorageConfig) (*storageImpl, error) {
+	segments, nextOffset, err := recoverStorage(dir, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &storageImpl{
+		dir:        dir,
+		segments:   segments,
+		nextOffset: nextOffset,
+		newDataCh:  make(chan struct{}),
+		config:     cfg,
+		retCancel:  cancel,
+	}
+	s.retentionMs.Store(cfg.DefaultRetentionMs)
+	s.retentionBytes.Store(cfg.DefaultRetentionBytes)
+
+	interval := time.Duration(cfg.RetentionCheckIntervalMs) * time.Millisecond
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	go s.startRetentionLoop(ctx, interval)
+
+	return s, nil
 }
 
-func (s *FileStorage) ReadByTime(timestampMs int64, maxBytes int) ([]byte, int64, error) {
-	return nil, 0, errors.New("not implemented")
+func (s *storageImpl) active() *SegmentStorage {
+	return s.segments[len(s.segments)-1]
 }
 
-func (s *FileStorage) EarliestOffset() int64 { return 0 }
-
-func (s *FileStorage) LatestOffset() int64 { return 0 }
-
-func (s *FileStorage) EnforceRetention(retentionMs int64, retentionBytes int64) (int, error) {
-	return 0, errors.New("not implemented")
+func (s *storageImpl) roll() error {
+	if err := s.active().Seal(); err != nil {
+		return err
+	}
+	newSeg, err := NewSegmentStorage(s.dir, s.nextOffset, s.config)
+	if err != nil {
+		return err
+	}
+	s.segments = append(s.segments, newSeg)
+	return nil
 }
 
-func (s *FileStorage) NewDataCh() <-chan struct{} { return nil }
+func (s *storageImpl) Append(batch []byte) (int64, error) {
+	s.closeMu.Lock()
+	closed := s.closed
+	s.closeMu.Unlock()
+	if closed {
+		return 0, ErrStorageClosed
+	}
 
-func (s *FileStorage) SetRetentionConfig(retentionMs int64, retentionBytes int64) {}
+	s.segMu.Lock()
+	baseOffset := s.nextOffset
+	binary.BigEndian.PutUint64(batch[0:8], uint64(baseOffset))
+	if _, err := s.active().Append(batch); err != nil {
+		s.segMu.Unlock()
+		return 0, err
+	}
+	recordCount := int64(binary.BigEndian.Uint32(batch[12:16]))
+	s.nextOffset += recordCount
+	if s.active().LogSize() >= s.config.SegmentMaxBytes {
+		if err := s.roll(); err != nil {
+			s.segMu.Unlock()
+			return 0, err
+		}
+	}
+	s.segMu.Unlock()
 
-func (s *FileStorage) Sync() error { return errors.New("not implemented") }
+	s.chanMu.Lock()
+	old := s.newDataCh
+	s.newDataCh = make(chan struct{})
+	s.chanMu.Unlock()
+	close(old)
 
-func (s *FileStorage) TruncateTo(offset int64) error { return errors.New("not implemented") }
+	return baseOffset, nil
+}
 
-func (s *FileStorage) Close() error { return errors.New("not implemented") }
+func (s *storageImpl) Read(offset int64, maxBytes int) ([]byte, int64, error) {
+	s.segMu.RLock()
+	segs := make([]*SegmentStorage, len(s.segments))
+	copy(segs, s.segments)
+	nextOffset := s.nextOffset
+	s.segMu.RUnlock()
+
+	if len(segs) == 0 {
+		return nil, offset, nil
+	}
+	if offset < segs[0].BaseOffset() {
+		return nil, 0, ErrOffsetOutOfRange
+	}
+	if offset >= nextOffset {
+		return nil, offset, nil
+	}
+
+	// Find last segment whose BaseOffset <= offset.
+	lo, hi := 0, len(segs)-1
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if segs[mid].BaseOffset() <= offset {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+
+	return segs[lo].Read(offset, maxBytes)
+}
+
+func (s *storageImpl) ReadByTime(timestampMs int64, maxBytes int) ([]byte, int64, error) {
+	s.segMu.RLock()
+	segs := make([]*SegmentStorage, len(s.segments))
+	copy(segs, s.segments)
+	s.segMu.RUnlock()
+
+	for _, seg := range segs {
+		data, next, err := seg.ReadByTime(timestampMs, maxBytes)
+		if err == ErrTimestampNotFound {
+			continue
+		}
+		if err != nil {
+			return nil, 0, err
+		}
+		if data != nil {
+			return data, next, nil
+		}
+	}
+	return nil, 0, ErrTimestampNotFound
+}
+
+func (s *storageImpl) EarliestOffset() int64 {
+	s.segMu.RLock()
+	defer s.segMu.RUnlock()
+	if len(s.segments) == 0 {
+		return 0
+	}
+	return s.segments[0].BaseOffset()
+}
+
+func (s *storageImpl) LatestOffset() int64 {
+	s.segMu.RLock()
+	defer s.segMu.RUnlock()
+	return s.nextOffset
+}
+
+func (s *storageImpl) NewDataCh() <-chan struct{} {
+	s.chanMu.Lock()
+	defer s.chanMu.Unlock()
+	return s.newDataCh
+}
+
+func (s *storageImpl) SetRetentionConfig(retentionMs int64, retentionBytes int64) {
+	s.retentionMs.Store(retentionMs)
+	s.retentionBytes.Store(retentionBytes)
+}
+
+func (s *storageImpl) Sync() error {
+	s.segMu.RLock()
+	defer s.segMu.RUnlock()
+	return s.active().log.Sync()
+}
+
+func (s *storageImpl) TruncateTo(offset int64) error {
+	s.segMu.Lock()
+	defer s.segMu.Unlock()
+
+	if offset == s.nextOffset {
+		return nil
+	}
+	if offset > s.nextOffset {
+		return fmt.Errorf("TruncateTo(%d) > LatestOffset(%d)", offset, s.nextOffset)
+	}
+
+	segs := s.segments
+	if len(segs) == 0 {
+		return nil
+	}
+
+	// Find last segment whose BaseOffset <= offset.
+	lo := len(segs) - 1
+	for lo > 0 && segs[lo].BaseOffset() > offset {
+		lo--
+	}
+
+	// Close and delete segments after lo.
+	for i := lo + 1; i < len(segs); i++ {
+		_ = segs[i].Close()
+		base := segmentBasePath(s.dir, segs[i].BaseOffset())
+		_ = os.Remove(base + ".log")
+		_ = os.Remove(base + ".index")
+		_ = os.Remove(base + ".timeindex")
+	}
+	s.segments = segs[:lo+1]
+	activeSeg := s.segments[lo]
+
+	// Sealed segments must be reopened for writing.
+	if activeSeg.sealed {
+		basePath := segmentBasePath(s.dir, activeSeg.baseOffset)
+		if err := activeSeg.log.Close(); err != nil {
+			return err
+		}
+		newLog, err := OpenLogSegment(basePath+".log", activeSeg.baseOffset, true)
+		if err != nil {
+			return err
+		}
+		activeSeg.log = newLog
+		activeSeg.sealed = false
+	}
+
+	// Find byte position for offset by scanning the log.
+	truncPos, err := findBytePosForOffset(activeSeg, offset)
+	if err != nil {
+		return err
+	}
+	if err := activeSeg.log.Truncate(truncPos); err != nil {
+		return err
+	}
+
+	// Rebuild indexes after truncation.
+	if err := rebuildSegmentIndexes(s.dir, activeSeg, s.config); err != nil {
+		return err
+	}
+
+	s.nextOffset = offset
+	return nil
+}
+
+func (s *storageImpl) Close() error {
+	s.closeMu.Lock()
+	if s.closed {
+		s.closeMu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.closeMu.Unlock()
+
+	s.retCancel()
+
+	s.segMu.Lock()
+	segs := s.segments
+	s.segMu.Unlock()
+
+	var firstErr error
+	for i, seg := range segs {
+		if i == len(segs)-1 && !seg.sealed {
+			if err := seg.Seal(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		if err := seg.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}

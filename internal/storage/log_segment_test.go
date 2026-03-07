@@ -196,8 +196,8 @@ func TestLogSegment_Truncate(t *testing.T) {
 	if err := seg.Truncate(int64(len(b1))); err != nil {
 		t.Fatalf("Truncate: %v", err)
 	}
-	if seg.logSize != int64(len(b1)) {
-		t.Errorf("logSize = %d, want %d", seg.logSize, len(b1))
+	if seg.logSizeVal.Load() != int64(len(b1)) {
+		t.Errorf("logSize = %d, want %d", seg.logSizeVal.Load(), len(b1))
 	}
 
 	var visited []string

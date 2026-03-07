@@ -265,7 +265,7 @@ func (s *SegmentStorage) Seal() error {
 
 // LogSize returns the number of bytes written to the log file.
 func (s *SegmentStorage) LogSize() int64 {
-	return s.log.logSize
+	return s.log.logSizeVal.Load()
 }
 
 // BaseOffset returns the base offset of this segment.
