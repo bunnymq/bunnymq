@@ -131,7 +131,7 @@ func scanActiveLog(logPath string, baseOffset int64) (validPos int64, nextOffset
 	if err != nil {
 		return 0, baseOffset, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
