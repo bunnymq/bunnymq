@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"sync/atomic"
 )
 
 var ErrSegmentReadOnly = errors.New("segment is read-only")
@@ -12,7 +13,7 @@ var ErrSegmentReadOnly = errors.New("segment is read-only")
 // LogSegment wraps a single .log file for append and read operations.
 type LogSegment struct {
 	file       *os.File
-	logSize    int64
+	logSizeVal atomic.Int64
 	baseOffset int64
 	readonly   bool
 }
@@ -42,12 +43,13 @@ func OpenLogSegment(path string, baseOffset int64, create bool) (*LogSegment, er
 		return nil, err
 	}
 
-	return &LogSegment{
+	ls := &LogSegment{
 		file:       f,
-		logSize:    info.Size(),
 		baseOffset: baseOffset,
 		readonly:   !create,
-	}, nil
+	}
+	ls.logSizeVal.Store(info.Size())
+	return ls, nil
 }
 
 // Append writes batch atomically to the log file using O_APPEND semantics.
@@ -56,11 +58,11 @@ func (s *LogSegment) Append(batch []byte) (int64, error) {
 	if s.readonly {
 		return 0, ErrSegmentReadOnly
 	}
-	startPos := s.logSize
+	startPos := s.logSizeVal.Load()
 	if _, err := s.file.Write(batch); err != nil {
 		return 0, err
 	}
-	s.logSize += int64(len(batch))
+	s.logSizeVal.Add(int64(len(batch)))
 	return startPos, nil
 }
 
@@ -81,8 +83,9 @@ func (s *LogSegment) ReadAt(pos int64, length int) ([]byte, error) {
 // callback with each batch's raw bytes and its start position. Stops early if
 // callback returns false.
 func (s *LogSegment) ScanFrom(startPos int64, callback func(batchBytes []byte, pos int64) bool) error {
+	logSize := s.logSizeVal.Load()
 	pos := startPos
-	for pos < s.logSize {
+	for pos < logSize {
 		// Read enough to get batch_length at bytes [8,12].
 		header, err := s.ReadAt(pos, 12)
 		if err != nil {
@@ -92,7 +95,7 @@ func (s *LogSegment) ScanFrom(startPos int64, callback func(batchBytes []byte, p
 			return err
 		}
 		batchLen := int(binary.BigEndian.Uint32(header[8:12]))
-		if batchLen < 12 || pos+int64(batchLen) > s.logSize {
+		if batchLen < 12 || pos+int64(batchLen) > logSize {
 			break
 		}
 		batch, err := s.ReadAt(pos, batchLen)
@@ -112,7 +115,7 @@ func (s *LogSegment) Truncate(pos int64) error {
 	if err := s.file.Truncate(pos); err != nil {
 		return err
 	}
-	s.logSize = pos
+	s.logSizeVal.Store(pos)
 	return nil
 }
 
