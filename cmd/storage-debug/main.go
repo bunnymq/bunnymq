@@ -76,7 +76,7 @@ func newAppendCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer s.Close()
+			defer func() { _ = s.Close() }()
 
 			scanner := bufio.NewScanner(os.Stdin)
 			for scanner.Scan() {
@@ -114,7 +114,7 @@ func newReadCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer s.Close()
+			defer func() { _ = s.Close() }()
 
 			mb := maxBytes
 			if mb <= 0 {
@@ -208,7 +208,7 @@ func newStatsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer s.Close()
+			defer func() { _ = s.Close() }()
 
 			matches, err := filepath.Glob(filepath.Join(dir, "*.log"))
 			if err != nil {
