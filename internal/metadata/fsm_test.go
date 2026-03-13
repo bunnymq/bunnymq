@@ -7,6 +7,42 @@ import (
 	sm "github.com/lni/dragonboat/v4/statemachine"
 )
 
+// helpers for CG tests
+
+func createTopicWithPartitions(t *testing.T, fsm *MetadataFSM, name string, count int32) {
+	t.Helper()
+	replicas := make([][]uint64, count)
+	for i := range replicas {
+		replicas[i] = []uint64{1}
+	}
+	result := applyCmd(t, fsm, MetadataCommand{
+		Type: CmdCreateTopic,
+		CreateTopic: &CreateTopicCmd{
+			Name:              name,
+			PartitionCount:    count,
+			ReplicationFactor: 1,
+			ReplicaNodeIDs:    replicas,
+		},
+	})
+	if result.Value != ResultOK {
+		t.Fatalf("createTopic %s: %d %s", name, result.Value, result.Data)
+	}
+}
+
+func joinGroup(t *testing.T, fsm *MetadataFSM, groupID, memberID, clientHost string, topics []string, joinedAtMs int64) sm.Result {
+	t.Helper()
+	return applyCmd(t, fsm, MetadataCommand{
+		Type: CmdJoinConsumerGroup,
+		JoinConsumerGroup: &JoinConsumerGroupCmd{
+			GroupID:          groupID,
+			MemberID:         memberID,
+			ClientHost:       clientHost,
+			SubscribedTopics: topics,
+			JoinedAtMs:       joinedAtMs,
+		},
+	})
+}
+
 func mustMarshal(t *testing.T, cmd MetadataCommand) []byte {
 	t.Helper()
 	b, err := json.Marshal(cmd)
@@ -223,5 +259,230 @@ func TestMetadataFSM_BadJSON(t *testing.T) {
 	}
 	if len(fsm.state.Topics) != 0 {
 		t.Error("state must be unchanged after bad JSON")
+	}
+}
+
+func TestCGFSM_JoinGroup_NewGroup(t *testing.T) {
+	fsm := NewMetadataFSM()
+	createTopicWithPartitions(t, fsm, "t1", 3)
+
+	result := joinGroup(t, fsm, "g1", "m1", "host1", []string{"t1"}, 1000)
+	if result.Value != ResultOK {
+		t.Fatalf("expected OK, got %d %s", result.Value, result.Data)
+	}
+
+	var jr joinResult
+	if err := json.Unmarshal(result.Data, &jr); err != nil {
+		t.Fatalf("unmarshal join result: %v", err)
+	}
+	if jr.MemberID != "m1" {
+		t.Errorf("member_id: got %q want %q", jr.MemberID, "m1")
+	}
+	if jr.GenerationID != 1 {
+		t.Errorf("generation_id: got %d want 1", jr.GenerationID)
+	}
+	if len(jr.AssignedPartitions) != 3 {
+		t.Errorf("assigned_partitions: got %d want 3", len(jr.AssignedPartitions))
+	}
+
+	group := fsm.state.Groups["g1"]
+	if group == nil {
+		t.Fatal("group not created")
+	}
+	if group.GenerationID != 1 {
+		t.Errorf("group generation_id: got %d want 1", group.GenerationID)
+	}
+}
+
+func TestCGFSM_JoinGroup_RebalanceTwoMembers(t *testing.T) {
+	fsm := NewMetadataFSM()
+	createTopicWithPartitions(t, fsm, "t1", 4)
+
+	joinGroup(t, fsm, "g1", "m1", "host1", []string{"t1"}, 1000)
+	result := joinGroup(t, fsm, "g1", "m2", "host2", []string{"t1"}, 2000)
+	if result.Value != ResultOK {
+		t.Fatalf("expected OK, got %d", result.Value)
+	}
+
+	var jr joinResult
+	if err := json.Unmarshal(result.Data, &jr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if jr.GenerationID != 2 {
+		t.Errorf("generation_id: got %d want 2", jr.GenerationID)
+	}
+
+	group := fsm.state.Groups["g1"]
+	m1Parts := len(group.Members["m1"].AssignedPartitions)
+	m2Parts := len(group.Members["m2"].AssignedPartitions)
+	if m1Parts+m2Parts != 4 {
+		t.Errorf("total assigned partitions: got %d want 4", m1Parts+m2Parts)
+	}
+	if m1Parts == 0 || m2Parts == 0 {
+		t.Errorf("each member must get at least one partition: m1=%d m2=%d", m1Parts, m2Parts)
+	}
+}
+
+func TestCGFSM_JoinGroup_ServerAssignedID(t *testing.T) {
+	fsm := NewMetadataFSM()
+	createTopicWithPartitions(t, fsm, "t1", 1)
+
+	result := joinGroup(t, fsm, "g1", "", "host1", []string{"t1"}, 5000)
+	if result.Value != ResultOK {
+		t.Fatalf("expected OK, got %d", result.Value)
+	}
+
+	var jr joinResult
+	if err := json.Unmarshal(result.Data, &jr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	wantID := "member-host1-5000"
+	if jr.MemberID != wantID {
+		t.Errorf("member_id: got %q want %q", jr.MemberID, wantID)
+	}
+	if _, ok := fsm.state.Groups["g1"].Members[wantID]; !ok {
+		t.Errorf("member %q not found in group state", wantID)
+	}
+}
+
+func TestCGFSM_LeaveGroup(t *testing.T) {
+	fsm := NewMetadataFSM()
+	createTopicWithPartitions(t, fsm, "t1", 6)
+
+	joinGroup(t, fsm, "g1", "m1", "host1", []string{"t1"}, 1000)
+	joinGroup(t, fsm, "g1", "m2", "host2", []string{"t1"}, 2000)
+	joinGroup(t, fsm, "g1", "m3", "host3", []string{"t1"}, 3000)
+
+	result := applyCmd(t, fsm, MetadataCommand{
+		Type: CmdLeaveConsumerGroup,
+		LeaveConsumerGroup: &LeaveConsumerGroupCmd{
+			GroupID:  "g1",
+			MemberID: "m2",
+		},
+	})
+	if result.Value != ResultOK {
+		t.Fatalf("expected OK, got %d %s", result.Value, result.Data)
+	}
+
+	group := fsm.state.Groups["g1"]
+	if _, ok := group.Members["m2"]; ok {
+		t.Error("m2 still present after leave")
+	}
+	if group.GenerationID != 4 {
+		t.Errorf("generation_id: got %d want 4", group.GenerationID)
+	}
+	total := len(group.Members["m1"].AssignedPartitions) + len(group.Members["m3"].AssignedPartitions)
+	if total != 6 {
+		t.Errorf("total assigned: got %d want 6", total)
+	}
+}
+
+func TestCGFSM_Heartbeat_OK(t *testing.T) {
+	fsm := NewMetadataFSM()
+	createTopicWithPartitions(t, fsm, "t1", 1)
+	joinGroup(t, fsm, "g1", "m1", "host1", []string{"t1"}, 1000)
+
+	result := applyCmd(t, fsm, MetadataCommand{
+		Type: CmdHeartbeatConsumerGroup,
+		HeartbeatConsumerGroup: &HeartbeatConsumerGroupCmd{
+			GroupID:      "g1",
+			MemberID:     "m1",
+			GenerationID: 1,
+			TimestampMs:  9999,
+		},
+	})
+	if result.Value != ResultOK {
+		t.Fatalf("expected OK (0), got %d", result.Value)
+	}
+	if fsm.state.Groups["g1"].Members["m1"].LastHeartbeatMs != 9999 {
+		t.Errorf("LastHeartbeatMs not updated")
+	}
+}
+
+func TestCGFSM_Heartbeat_Stale(t *testing.T) {
+	fsm := NewMetadataFSM()
+	createTopicWithPartitions(t, fsm, "t1", 1)
+	joinGroup(t, fsm, "g1", "m1", "host1", []string{"t1"}, 1000)
+
+	result := applyCmd(t, fsm, MetadataCommand{
+		Type: CmdHeartbeatConsumerGroup,
+		HeartbeatConsumerGroup: &HeartbeatConsumerGroupCmd{
+			GroupID:      "g1",
+			MemberID:     "m1",
+			GenerationID: 99,
+			TimestampMs:  2000,
+		},
+	})
+	if result.Value != 1 {
+		t.Fatalf("expected 1 (rebalance needed), got %d", result.Value)
+	}
+}
+
+func TestCGFSM_CommitOffset(t *testing.T) {
+	fsm := NewMetadataFSM()
+	createTopicWithPartitions(t, fsm, "t1", 2)
+	joinGroup(t, fsm, "g1", "m1", "host1", []string{"t1"}, 1000)
+
+	result := applyCmd(t, fsm, MetadataCommand{
+		Type: CmdCommitConsumerOffset,
+		CommitConsumerOffset: &CommitConsumerOffsetCmd{
+			GroupID: "g1",
+			Offsets: []CommittedOffset{
+				{Topic: "t1", PartitionID: 0, Offset: 42},
+				{Topic: "t1", PartitionID: 1, Offset: 77},
+			},
+		},
+	})
+	if result.Value != ResultOK {
+		t.Fatalf("expected OK, got %d %s", result.Value, result.Data)
+	}
+
+	group := fsm.state.Groups["g1"]
+	if off := group.CommittedOffsets[PartitionKey{"t1", 0}]; off != 42 {
+		t.Errorf("partition 0 offset: got %d want 42", off)
+	}
+	if off := group.CommittedOffsets[PartitionKey{"t1", 1}]; off != 77 {
+		t.Errorf("partition 1 offset: got %d want 77", off)
+	}
+}
+
+func TestCGFSM_Rebalance_Determinism(t *testing.T) {
+	setup := func() *MetadataFSM {
+		fsm := NewMetadataFSM()
+		createTopicWithPartitions(t, fsm, "t1", 5)
+		joinGroup(t, fsm, "g1", "mA", "hostA", []string{"t1"}, 1000)
+		joinGroup(t, fsm, "g1", "mB", "hostB", []string{"t1"}, 2000)
+		joinGroup(t, fsm, "g1", "mC", "hostC", []string{"t1"}, 3000)
+		return fsm
+	}
+
+	fsm1 := setup()
+	fsm2 := setup()
+
+	applyRebalance := func(fsm *MetadataFSM) {
+		applyCmd(t, fsm, MetadataCommand{
+			Type: CmdRebalanceConsumerGroup,
+			RebalanceConsumerGroup: &RebalanceConsumerGroupCmd{
+				GroupID:          "g1",
+				ExpiredMemberIDs: []string{"mC"},
+				TimestampMs:      9000,
+			},
+		})
+	}
+	applyRebalance(fsm1)
+	applyRebalance(fsm2)
+
+	for _, mID := range []string{"mA", "mB"} {
+		p1 := fsm1.state.Groups["g1"].Members[mID].AssignedPartitions
+		p2 := fsm2.state.Groups["g1"].Members[mID].AssignedPartitions
+		if len(p1) != len(p2) {
+			t.Errorf("member %s: fsm1 got %d partitions, fsm2 got %d", mID, len(p1), len(p2))
+			continue
+		}
+		for i := range p1 {
+			if p1[i] != p2[i] {
+				t.Errorf("member %s partition[%d]: fsm1=%v fsm2=%v", mID, i, p1[i], p2[i])
+			}
+		}
 	}
 }

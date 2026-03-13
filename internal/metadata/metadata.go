@@ -2,7 +2,9 @@ package metadata
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"sort"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
 )
@@ -63,6 +65,31 @@ func (fsm *MetadataFSM) Update(e sm.Entry) (sm.Result, error) {
 			return ErrorResult(ResultErrInvalidArg, "missing assign_partition_leader payload"), nil
 		}
 		return fsm.applyAssignPartitionLeader(cmd.AssignPartitionLeader), nil
+	case CmdJoinConsumerGroup:
+		if cmd.JoinConsumerGroup == nil {
+			return ErrorResult(ResultErrInvalidArg, "missing join_consumer_group payload"), nil
+		}
+		return fsm.applyJoinConsumerGroup(cmd.JoinConsumerGroup), nil
+	case CmdLeaveConsumerGroup:
+		if cmd.LeaveConsumerGroup == nil {
+			return ErrorResult(ResultErrInvalidArg, "missing leave_consumer_group payload"), nil
+		}
+		return fsm.applyLeaveConsumerGroup(cmd.LeaveConsumerGroup), nil
+	case CmdHeartbeatConsumerGroup:
+		if cmd.HeartbeatConsumerGroup == nil {
+			return ErrorResult(ResultErrInvalidArg, "missing heartbeat_consumer_group payload"), nil
+		}
+		return fsm.applyHeartbeatConsumerGroup(cmd.HeartbeatConsumerGroup), nil
+	case CmdCommitConsumerOffset:
+		if cmd.CommitConsumerOffset == nil {
+			return ErrorResult(ResultErrInvalidArg, "missing commit_consumer_offset payload"), nil
+		}
+		return fsm.applyCommitConsumerOffset(cmd.CommitConsumerOffset), nil
+	case CmdRebalanceConsumerGroup:
+		if cmd.RebalanceConsumerGroup == nil {
+			return ErrorResult(ResultErrInvalidArg, "missing rebalance_consumer_group payload"), nil
+		}
+		return fsm.applyRebalanceConsumerGroup(cmd.RebalanceConsumerGroup), nil
 	default:
 		return ErrorResult(ResultErrInvalidArg, "unknown command type"), nil
 	}
@@ -169,6 +196,156 @@ func (fsm *MetadataFSM) applyAssignPartitionLeader(cmd *AssignPartitionLeaderCmd
 	partition.LeaderNodeID = cmd.LeaderNodeID
 	partition.LeaderEpoch = cmd.LeaderEpoch
 	return OKResult()
+}
+
+type joinResult struct {
+	MemberID           string         `json:"member_id"`
+	AssignedPartitions []PartitionKey `json:"assigned_partitions"`
+	GenerationID       int32          `json:"generation_id"`
+}
+
+func (fsm *MetadataFSM) applyJoinConsumerGroup(cmd *JoinConsumerGroupCmd) sm.Result {
+	group, exists := fsm.state.Groups[cmd.GroupID]
+	if !exists {
+		group = &ConsumerGroupMeta{
+			GroupID:          cmd.GroupID,
+			Members:          make(map[string]*MemberInfo),
+			CommittedOffsets: make(map[PartitionKey]int64),
+		}
+		fsm.state.Groups[cmd.GroupID] = group
+	}
+
+	memberID := cmd.MemberID
+	if memberID == "" {
+		memberID = fmt.Sprintf("member-%s-%d", cmd.ClientHost, cmd.JoinedAtMs)
+	}
+
+	group.Members[memberID] = &MemberInfo{
+		MemberID:         memberID,
+		ClientHost:       cmd.ClientHost,
+		SubscribedTopics: cmd.SubscribedTopics,
+		LastHeartbeatMs:  cmd.JoinedAtMs,
+	}
+
+	rebalance(group, fsm.state.Topics, fsm.state.Partitions)
+	group.GenerationID++
+
+	assigned := group.Members[memberID].AssignedPartitions
+	if assigned == nil {
+		assigned = []PartitionKey{}
+	}
+
+	data, _ := json.Marshal(joinResult{
+		MemberID:           memberID,
+		AssignedPartitions: assigned,
+		GenerationID:       group.GenerationID,
+	})
+	return sm.Result{Value: ResultOK, Data: data}
+}
+
+func (fsm *MetadataFSM) applyLeaveConsumerGroup(cmd *LeaveConsumerGroupCmd) sm.Result {
+	group, exists := fsm.state.Groups[cmd.GroupID]
+	if !exists {
+		return ErrorResult(ResultErrNotFound, "group not found")
+	}
+	if _, exists := group.Members[cmd.MemberID]; !exists {
+		return ErrorResult(ResultErrNotFound, "member not found")
+	}
+	delete(group.Members, cmd.MemberID)
+	rebalance(group, fsm.state.Topics, fsm.state.Partitions)
+	group.GenerationID++
+	return OKResult()
+}
+
+func (fsm *MetadataFSM) applyHeartbeatConsumerGroup(cmd *HeartbeatConsumerGroupCmd) sm.Result {
+	group, exists := fsm.state.Groups[cmd.GroupID]
+	if !exists {
+		return ErrorResult(ResultErrNotFound, "group not found")
+	}
+	member, exists := group.Members[cmd.MemberID]
+	if !exists {
+		return ErrorResult(ResultErrNotFound, "member not found")
+	}
+	member.LastHeartbeatMs = cmd.TimestampMs
+	if cmd.GenerationID != group.GenerationID {
+		return sm.Result{Value: 1}
+	}
+	return OKResult()
+}
+
+func (fsm *MetadataFSM) applyCommitConsumerOffset(cmd *CommitConsumerOffsetCmd) sm.Result {
+	group, exists := fsm.state.Groups[cmd.GroupID]
+	if !exists {
+		return ErrorResult(ResultErrNotFound, "group not found")
+	}
+	for _, o := range cmd.Offsets {
+		group.CommittedOffsets[PartitionKey{Topic: o.Topic, PartitionID: o.PartitionID}] = o.Offset
+	}
+	return OKResult()
+}
+
+func (fsm *MetadataFSM) applyRebalanceConsumerGroup(cmd *RebalanceConsumerGroupCmd) sm.Result {
+	group, exists := fsm.state.Groups[cmd.GroupID]
+	if !exists {
+		return ErrorResult(ResultErrNotFound, "group not found")
+	}
+	for _, id := range cmd.ExpiredMemberIDs {
+		delete(group.Members, id)
+	}
+	rebalance(group, fsm.state.Topics, fsm.state.Partitions)
+	group.GenerationID++
+	return OKResult()
+}
+
+// rebalance computes range-based partition assignment for all group members.
+// Inputs are sorted before iteration to guarantee determinism across replicas.
+func rebalance(group *ConsumerGroupMeta, topics map[string]*TopicMeta, partitions map[PartitionKey]*PartitionMeta) {
+	eligible := collectEligiblePartitions(group.Members, topics, partitions)
+	sort.Slice(eligible, func(i, j int) bool {
+		if eligible[i].Topic != eligible[j].Topic {
+			return eligible[i].Topic < eligible[j].Topic
+		}
+		return eligible[i].PartitionID < eligible[j].PartitionID
+	})
+
+	members := sortedMemberIDs(group.Members)
+	if len(members) == 0 {
+		return
+	}
+
+	for i, memberID := range members {
+		lo := i * len(eligible) / len(members)
+		hi := (i + 1) * len(eligible) / len(members)
+		group.Members[memberID].AssignedPartitions = eligible[lo:hi]
+	}
+}
+
+func collectEligiblePartitions(members map[string]*MemberInfo, topics map[string]*TopicMeta, partitions map[PartitionKey]*PartitionMeta) []PartitionKey {
+	subscribed := make(map[string]struct{})
+	for _, m := range members {
+		for _, t := range m.SubscribedTopics {
+			subscribed[t] = struct{}{}
+		}
+	}
+
+	var eligible []PartitionKey
+	for key := range partitions {
+		if _, ok := subscribed[key.Topic]; ok {
+			if _, ok := topics[key.Topic]; ok {
+				eligible = append(eligible, key)
+			}
+		}
+	}
+	return eligible
+}
+
+func sortedMemberIDs(members map[string]*MemberInfo) []string {
+	ids := make([]string, 0, len(members))
+	for id := range members {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func (fsm *MetadataFSM) Lookup(q interface{}) (interface{}, error) {
