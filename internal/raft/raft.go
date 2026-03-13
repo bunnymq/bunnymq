@@ -1,16 +1,5 @@
 package raft
 
-import (
-	"context"
-	"errors"
-
-	sm "github.com/lni/dragonboat/v4/statemachine"
-)
-
-// Host wraps dragonboat's NodeHost and exposes typed helpers for metadata and
-// partition shard operations. Other modules never import dragonboat directly.
-type Host struct{}
-
 // MetadataCommand is the command envelope for the Metadata FSM.
 type MetadataCommand struct {
 	Type                   CommandType `json:"type"`
@@ -111,42 +100,3 @@ const (
 	QueryGetNewDataCh
 )
 
-// SyncProposeMetadata proposes a metadata command and blocks until quorum commit.
-func (h *Host) SyncProposeMetadata(ctx context.Context, cmd MetadataCommand) (sm.Result, error) {
-	return sm.Result{}, errors.New("not implemented")
-}
-
-// ProposeMetadata proposes a metadata command with acks=0 (fire and forget).
-func (h *Host) ProposeMetadata(ctx context.Context, cmd MetadataCommand) error {
-	return errors.New("not implemented")
-}
-
-// LookupMetadata queries the local Metadata FSM without a Raft round-trip.
-func (h *Host) LookupMetadata(ctx context.Context, q MetadataQuery) (interface{}, error) {
-	return nil, errors.New("not implemented")
-}
-
-// SyncProposePartition proposes a partition command and blocks until quorum commit.
-func (h *Host) SyncProposePartition(ctx context.Context, shardID uint64, cmd PartitionCommand) (sm.Result, error) {
-	return sm.Result{}, errors.New("not implemented")
-}
-
-// ProposePartition proposes a partition command with acks=0 (fire and forget).
-func (h *Host) ProposePartition(ctx context.Context, shardID uint64, cmd PartitionCommand) error {
-	return errors.New("not implemented")
-}
-
-// LookupPartition queries the local Partition FSM without a Raft round-trip.
-func (h *Host) LookupPartition(ctx context.Context, shardID uint64, q PartitionQuery) (interface{}, error) {
-	return nil, errors.New("not implemented")
-}
-
-// StartPartitionShard starts a partition Raft shard on this node.
-func (h *Host) StartPartitionShard(shardID uint64, initialMembers map[uint64]string, join bool) error {
-	return errors.New("not implemented")
-}
-
-// StopPartitionShard stops a partition Raft shard on this node.
-func (h *Host) StopPartitionShard(shardID uint64) error {
-	return errors.New("not implemented")
-}
