@@ -409,11 +409,26 @@ func (fsm *MetadataFSM) Lookup(q interface{}) (interface{}, error) {
 	}
 }
 
-func (fsm *MetadataFSM) SaveSnapshot(w io.Writer, c sm.ISnapshotFileCollection, done <-chan struct{}) error {
-	return nil
+func (fsm *MetadataFSM) SaveSnapshot(w io.Writer, _ sm.ISnapshotFileCollection, done <-chan struct{}) error {
+	select {
+	case <-done:
+		return sm.ErrSnapshotStopped
+	default:
+	}
+	return json.NewEncoder(w).Encode(fsm.state)
 }
 
-func (fsm *MetadataFSM) RecoverFromSnapshot(r io.Reader, files []sm.SnapshotFile, done <-chan struct{}) error {
+func (fsm *MetadataFSM) RecoverFromSnapshot(r io.Reader, _ []sm.SnapshotFile, done <-chan struct{}) error {
+	select {
+	case <-done:
+		return sm.ErrSnapshotStopped
+	default:
+	}
+	s := &MetadataState{}
+	if err := json.NewDecoder(r).Decode(s); err != nil {
+		return err
+	}
+	fsm.state = s
 	return nil
 }
 

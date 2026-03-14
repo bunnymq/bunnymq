@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -444,6 +445,92 @@ func TestCGFSM_CommitOffset(t *testing.T) {
 	}
 	if off := group.CommittedOffsets[PartitionKey{"t1", 1}]; off != 77 {
 		t.Errorf("partition 1 offset: got %d want 77", off)
+	}
+}
+
+func TestMetadataFSM_InterfaceConformance(t *testing.T) {
+	var _ sm.IStateMachine = (*MetadataFSM)(nil)
+}
+
+func TestMetadataFSM_SnapshotRoundTrip(t *testing.T) {
+	src := NewMetadataFSM()
+
+	createTopicWithPartitions(t, src, "topic-a", 3)
+	createTopicWithPartitions(t, src, "topic-b", 3)
+
+	joinGroup(t, src, "g1", "m1", "host1", []string{"topic-a", "topic-b"}, 1000)
+	joinGroup(t, src, "g1", "m2", "host2", []string{"topic-a", "topic-b"}, 2000)
+
+	applyCmd(t, src, MetadataCommand{
+		Type: CmdCommitConsumerOffset,
+		CommitConsumerOffset: &CommitConsumerOffsetCmd{
+			GroupID: "g1",
+			Offsets: []CommittedOffset{
+				{Topic: "topic-a", PartitionID: 0, Offset: 10},
+				{Topic: "topic-a", PartitionID: 1, Offset: 20},
+				{Topic: "topic-b", PartitionID: 2, Offset: 30},
+			},
+		},
+	})
+
+	var buf bytes.Buffer
+	if err := src.SaveSnapshot(&buf, nil, make(chan struct{})); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	dst := NewMetadataFSM()
+	if err := dst.RecoverFromSnapshot(&buf, nil, make(chan struct{})); err != nil {
+		t.Fatalf("RecoverFromSnapshot: %v", err)
+	}
+
+	if len(dst.state.Topics) != 2 {
+		t.Errorf("topics: got %d want 2", len(dst.state.Topics))
+	}
+	if len(dst.state.Partitions) != 6 {
+		t.Errorf("partitions: got %d want 6", len(dst.state.Partitions))
+	}
+
+	g := dst.state.Groups["g1"]
+	if g == nil {
+		t.Fatal("group g1 not restored")
+	}
+	if len(g.Members) != 2 {
+		t.Errorf("members: got %d want 2", len(g.Members))
+	}
+
+	wantOffsets := map[PartitionKey]int64{
+		{Topic: "topic-a", PartitionID: 0}: 10,
+		{Topic: "topic-a", PartitionID: 1}: 20,
+		{Topic: "topic-b", PartitionID: 2}: 30,
+	}
+	for k, want := range wantOffsets {
+		got := g.CommittedOffsets[k]
+		if got != want {
+			t.Errorf("offset %v: got %d want %d", k, got, want)
+		}
+	}
+
+	// Verify via Lookup
+	res, err := dst.Lookup(MetadataQuery{Type: QueryGetTopic, TopicName: "topic-a"})
+	if err != nil {
+		t.Fatalf("Lookup topic-a: %v", err)
+	}
+	tm := res.(*TopicMeta)
+	if tm.PartitionCount != 3 {
+		t.Errorf("topic-a partition_count: got %d want 3", tm.PartitionCount)
+	}
+}
+
+func TestMetadataFSM_SnapshotDone(t *testing.T) {
+	fsm := NewMetadataFSM()
+
+	done := make(chan struct{})
+	close(done)
+
+	var buf bytes.Buffer
+	err := fsm.SaveSnapshot(&buf, nil, done)
+	if err != sm.ErrSnapshotStopped {
+		t.Fatalf("expected ErrSnapshotStopped, got %v", err)
 	}
 }
 
