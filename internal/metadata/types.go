@@ -1,10 +1,13 @@
 package metadata
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 )
+
+var ErrNotFound = errors.New("not found")
 
 // --- In-memory state ---
 
@@ -209,6 +212,7 @@ type MetadataQuery struct {
 	Type        QueryType
 	TopicName   string
 	PartitionID int32
+	NodeID      uint64
 	GroupID     string
 	PartKey     PartitionKey
 }
