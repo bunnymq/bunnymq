@@ -34,64 +34,35 @@ func (fsm *MetadataFSM) Update(e sm.Entry) (sm.Result, error) {
 	if err := json.Unmarshal(e.Cmd, &cmd); err != nil {
 		return ErrorResult(ResultErrInvalidArg, "invalid command JSON"), nil
 	}
+	return fsm.applyCommand(&cmd), nil
+}
+
+func (fsm *MetadataFSM) applyCommand(cmd *MetadataCommand) sm.Result {
 	switch cmd.Type {
 	case CmdCreateTopic:
-		if cmd.CreateTopic == nil {
-			return ErrorResult(ResultErrInvalidArg, "missing create_topic payload"), nil
-		}
-		return fsm.applyCreateTopic(cmd.CreateTopic), nil
+		return fsm.applyCreateTopic(cmd.CreateTopic)
 	case CmdDeleteTopic:
-		if cmd.DeleteTopic == nil {
-			return ErrorResult(ResultErrInvalidArg, "missing delete_topic payload"), nil
-		}
-		return fsm.applyDeleteTopic(cmd.DeleteTopic), nil
+		return fsm.applyDeleteTopic(cmd.DeleteTopic)
 	case CmdAlterTopicPartCount:
-		if cmd.AlterTopicPartCount == nil {
-			return ErrorResult(ResultErrInvalidArg, "missing alter_topic_part_count payload"), nil
-		}
-		return fsm.applyAlterTopicPartCount(cmd.AlterTopicPartCount), nil
+		return fsm.applyAlterTopicPartCount(cmd.AlterTopicPartCount)
 	case CmdAlterTopicRetention:
-		if cmd.AlterTopicRetention == nil {
-			return ErrorResult(ResultErrInvalidArg, "missing alter_topic_retention payload"), nil
-		}
-		return fsm.applyAlterTopicRetention(cmd.AlterTopicRetention), nil
+		return fsm.applyAlterTopicRetention(cmd.AlterTopicRetention)
 	case CmdRegisterNode:
-		if cmd.RegisterNode == nil {
-			return ErrorResult(ResultErrInvalidArg, "missing register_node payload"), nil
-		}
-		return fsm.applyRegisterNode(cmd.RegisterNode), nil
+		return fsm.applyRegisterNode(cmd.RegisterNode)
 	case CmdAssignPartitionLeader:
-		if cmd.AssignPartitionLeader == nil {
-			return ErrorResult(ResultErrInvalidArg, "missing assign_partition_leader payload"), nil
-		}
-		return fsm.applyAssignPartitionLeader(cmd.AssignPartitionLeader), nil
+		return fsm.applyAssignPartitionLeader(cmd.AssignPartitionLeader)
 	case CmdJoinConsumerGroup:
-		if cmd.JoinConsumerGroup == nil {
-			return ErrorResult(ResultErrInvalidArg, "missing join_consumer_group payload"), nil
-		}
-		return fsm.applyJoinConsumerGroup(cmd.JoinConsumerGroup), nil
+		return fsm.applyJoinConsumerGroup(cmd.JoinConsumerGroup)
 	case CmdLeaveConsumerGroup:
-		if cmd.LeaveConsumerGroup == nil {
-			return ErrorResult(ResultErrInvalidArg, "missing leave_consumer_group payload"), nil
-		}
-		return fsm.applyLeaveConsumerGroup(cmd.LeaveConsumerGroup), nil
+		return fsm.applyLeaveConsumerGroup(cmd.LeaveConsumerGroup)
 	case CmdHeartbeatConsumerGroup:
-		if cmd.HeartbeatConsumerGroup == nil {
-			return ErrorResult(ResultErrInvalidArg, "missing heartbeat_consumer_group payload"), nil
-		}
-		return fsm.applyHeartbeatConsumerGroup(cmd.HeartbeatConsumerGroup), nil
+		return fsm.applyHeartbeatConsumerGroup(cmd.HeartbeatConsumerGroup)
 	case CmdCommitConsumerOffset:
-		if cmd.CommitConsumerOffset == nil {
-			return ErrorResult(ResultErrInvalidArg, "missing commit_consumer_offset payload"), nil
-		}
-		return fsm.applyCommitConsumerOffset(cmd.CommitConsumerOffset), nil
+		return fsm.applyCommitConsumerOffset(cmd.CommitConsumerOffset)
 	case CmdRebalanceConsumerGroup:
-		if cmd.RebalanceConsumerGroup == nil {
-			return ErrorResult(ResultErrInvalidArg, "missing rebalance_consumer_group payload"), nil
-		}
-		return fsm.applyRebalanceConsumerGroup(cmd.RebalanceConsumerGroup), nil
+		return fsm.applyRebalanceConsumerGroup(cmd.RebalanceConsumerGroup)
 	default:
-		return ErrorResult(ResultErrInvalidArg, "unknown command type"), nil
+		return ErrorResult(ResultErrInvalidArg, "unknown command type")
 	}
 }
 

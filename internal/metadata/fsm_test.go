@@ -288,6 +288,7 @@ func TestCGFSM_JoinGroup_NewGroup(t *testing.T) {
 	group := fsm.state.Groups["g1"]
 	if group == nil {
 		t.Fatal("group not created")
+		return
 	}
 	if group.GenerationID != 1 {
 		t.Errorf("group generation_id: got %d want 1", group.GenerationID)
