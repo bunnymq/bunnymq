@@ -38,6 +38,7 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11.3
+          verify: false
 
       - name: Test
         run: make test
