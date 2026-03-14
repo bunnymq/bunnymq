@@ -40,3 +40,10 @@ type RetentionConfigPayload struct {
 	RetentionMs    int64 `json:"retention_ms"`
 	RetentionBytes int64 `json:"retention_bytes"`
 }
+
+// PartitionLookupResult wraps the 3-value tuple from storage.Read / storage.ReadByTime
+// into a single interface{} value for Lookup's return type.
+type PartitionLookupResult struct {
+	Batches    []byte
+	NextOffset int64
+}
