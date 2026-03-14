@@ -320,7 +320,93 @@ func sortedMemberIDs(members map[string]*MemberInfo) []string {
 }
 
 func (fsm *MetadataFSM) Lookup(q interface{}) (interface{}, error) {
-	return nil, nil
+	query, ok := q.(MetadataQuery)
+	if !ok {
+		return nil, fmt.Errorf("expected MetadataQuery, got %T", q)
+	}
+
+	switch query.Type {
+	case QueryGetTopic:
+		t, exists := fsm.state.Topics[query.TopicName]
+		if !exists {
+			return nil, ErrNotFound
+		}
+		c := *t
+		return &c, nil
+
+	case QueryListTopics:
+		topics := make([]*TopicMeta, 0, len(fsm.state.Topics))
+		for _, t := range fsm.state.Topics {
+			c := *t
+			topics = append(topics, &c)
+		}
+		sort.Slice(topics, func(i, j int) bool {
+			return topics[i].Name < topics[j].Name
+		})
+		return topics, nil
+
+	case QueryGetPartition:
+		key := PartitionKey{Topic: query.TopicName, PartitionID: query.PartitionID}
+		p, exists := fsm.state.Partitions[key]
+		if !exists {
+			return nil, ErrNotFound
+		}
+		c := *p
+		return &c, nil
+
+	case QueryGetPartitions:
+		if _, exists := fsm.state.Topics[query.TopicName]; !exists {
+			return nil, ErrNotFound
+		}
+		var parts []*PartitionMeta
+		for key, p := range fsm.state.Partitions {
+			if key.Topic == query.TopicName {
+				c := *p
+				parts = append(parts, &c)
+			}
+		}
+		sort.Slice(parts, func(i, j int) bool {
+			return parts[i].PartitionID < parts[j].PartitionID
+		})
+		return parts, nil
+
+	case QueryGetNode:
+		n, exists := fsm.state.Nodes[query.NodeID]
+		if !exists {
+			return nil, ErrNotFound
+		}
+		c := *n
+		return &c, nil
+
+	case QueryListNodes:
+		nodes := make([]*NodeInfo, 0, len(fsm.state.Nodes))
+		for _, n := range fsm.state.Nodes {
+			c := *n
+			nodes = append(nodes, &c)
+		}
+		sort.Slice(nodes, func(i, j int) bool {
+			return nodes[i].NodeID < nodes[j].NodeID
+		})
+		return nodes, nil
+
+	case QueryGetGroup:
+		g, exists := fsm.state.Groups[query.GroupID]
+		if !exists {
+			return nil, ErrNotFound
+		}
+		c := *g
+		return &c, nil
+
+	case QueryGetCommittedOffset:
+		g, exists := fsm.state.Groups[query.GroupID]
+		if !exists {
+			return nil, ErrNotFound
+		}
+		return g.CommittedOffsets[query.PartKey], nil
+
+	default:
+		return nil, fmt.Errorf("unknown query type: %q", query.Type)
+	}
 }
 
 func (fsm *MetadataFSM) SaveSnapshot(w io.Writer, c sm.ISnapshotFileCollection, done <-chan struct{}) error {
