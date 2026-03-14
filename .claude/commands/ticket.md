@@ -69,6 +69,14 @@ Go through every checkbox in the **Definition of done** section:
 
 Fix any failures before proceeding to the PR.
 
+## Step 6.5 — Run the linter
+
+```bash
+golangci-lint run ./...
+```
+
+All issues must be resolved before opening the PR. CI runs golangci-lint and will fail the PR if there are any issues.
+
 ## Step 7 — Commit
 
 Stage and commit all new and modified files:

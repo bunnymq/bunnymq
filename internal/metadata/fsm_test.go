@@ -493,6 +493,7 @@ func TestMetadataFSM_SnapshotRoundTrip(t *testing.T) {
 	g := dst.state.Groups["g1"]
 	if g == nil {
 		t.Fatal("group g1 not restored")
+		return
 	}
 	if len(g.Members) != 2 {
 		t.Errorf("members: got %d want 2", len(g.Members))
