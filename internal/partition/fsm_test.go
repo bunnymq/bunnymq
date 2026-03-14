@@ -1,6 +1,7 @@
 package partition
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"os"
@@ -190,6 +191,168 @@ func TestPartitionFSM_OpenReconcile(t *testing.T) {
 	}
 	if got := fsm2.storage.LatestOffset(); got != committedOffset {
 		t.Fatalf("LatestOffset after reconcile = %d, want %d", got, committedOffset)
+	}
+}
+
+// TestPartitionFSM_Lookup_Read appends a batch via Update; Lookup QueryRead at offset 0
+// returns the batch bytes.
+func TestPartitionFSM_Lookup_Read(t *testing.T) {
+	fsm := openFSM(t)
+	if _, err := fsm.Open(nil); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	batch := makeBatch(t, "hello", 1000)
+	cmd := append([]byte{CmdAppendBatch}, batch...)
+	if _, err := fsm.Update([]sm.Entry{{Index: 1, Cmd: cmd}}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	res, err := fsm.Lookup(PartitionQuery{Type: QueryRead, Offset: 0, MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	lr, ok := res.(PartitionLookupResult)
+	if !ok {
+		t.Fatalf("expected PartitionLookupResult, got %T", res)
+	}
+	if len(lr.Batches) == 0 {
+		t.Fatal("Lookup returned empty Batches")
+	}
+}
+
+// TestPartitionFSM_Lookup_EarliestLatest verifies QueryEarliestOffset and QueryLatestOffset
+// after 3 appends.
+func TestPartitionFSM_Lookup_EarliestLatest(t *testing.T) {
+	fsm := openFSM(t)
+	if _, err := fsm.Open(nil); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	for i := 1; i <= 3; i++ {
+		batch := makeBatch(t, "msg", int64(i*100))
+		cmd := append([]byte{CmdAppendBatch}, batch...)
+		if _, err := fsm.Update([]sm.Entry{{Index: uint64(i), Cmd: cmd}}); err != nil {
+			t.Fatalf("Update %d: %v", i, err)
+		}
+	}
+
+	earliest, err := fsm.Lookup(PartitionQuery{Type: QueryEarliestOffset})
+	if err != nil {
+		t.Fatalf("Lookup EarliestOffset: %v", err)
+	}
+	if earliest.(int64) != 0 {
+		t.Fatalf("EarliestOffset = %d, want 0", earliest)
+	}
+
+	latest, err := fsm.Lookup(PartitionQuery{Type: QueryLatestOffset})
+	if err != nil {
+		t.Fatalf("Lookup LatestOffset: %v", err)
+	}
+	if latest.(int64) != 3 {
+		t.Fatalf("LatestOffset = %d, want 3", latest)
+	}
+}
+
+// TestPartitionFSM_Lookup_ReadNoData verifies that QueryRead at offset == LatestOffset
+// returns (nil, offset, nil).
+func TestPartitionFSM_Lookup_ReadNoData(t *testing.T) {
+	fsm := openFSM(t)
+	if _, err := fsm.Open(nil); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	batch := makeBatch(t, "msg", 100)
+	cmd := append([]byte{CmdAppendBatch}, batch...)
+	if _, err := fsm.Update([]sm.Entry{{Index: 1, Cmd: cmd}}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	latestOffset := fsm.storage.LatestOffset()
+	res, err := fsm.Lookup(PartitionQuery{Type: QueryRead, Offset: latestOffset, MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	lr, ok := res.(PartitionLookupResult)
+	if !ok {
+		t.Fatalf("expected PartitionLookupResult, got %T", res)
+	}
+	if lr.Batches != nil {
+		t.Fatalf("expected nil Batches at latest offset, got %d bytes", len(lr.Batches))
+	}
+	if lr.NextOffset != latestOffset {
+		t.Fatalf("NextOffset = %d, want %d", lr.NextOffset, latestOffset)
+	}
+}
+
+// TestPartitionFSM_SnapshotNoOp calls PrepareSnapshot, SaveSnapshot, RecoverFromSnapshot;
+// verifies no error and state is unchanged.
+func TestPartitionFSM_SnapshotNoOp(t *testing.T) {
+	fsm := openFSM(t)
+	if _, err := fsm.Open(nil); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	batch := makeBatch(t, "data", 42)
+	cmd := append([]byte{CmdAppendBatch}, batch...)
+	if _, err := fsm.Update([]sm.Entry{{Index: 1, Cmd: cmd}}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	offsetBefore := fsm.storage.LatestOffset()
+
+	ctx, err := fsm.PrepareSnapshot()
+	if err != nil {
+		t.Fatalf("PrepareSnapshot: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := fsm.SaveSnapshot(ctx, &buf, nil); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+	if buf.String() != "strategy-a-noop" {
+		t.Fatalf("SaveSnapshot wrote %q, want %q", buf.String(), "strategy-a-noop")
+	}
+
+	if err := fsm.RecoverFromSnapshot(&buf, nil); err != nil {
+		t.Fatalf("RecoverFromSnapshot: %v", err)
+	}
+
+	if fsm.storage.LatestOffset() != offsetBefore {
+		t.Fatalf("LatestOffset changed after snapshot round-trip")
+	}
+}
+
+// TestPartitionFSM_Sync_NoOp verifies that Sync returns nil.
+func TestPartitionFSM_Sync_NoOp(t *testing.T) {
+	fsm := openFSM(t)
+	if _, err := fsm.Open(nil); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := fsm.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+}
+
+// TestPartitionFSM_Close verifies that after Close, subsequent Lookup returns an error.
+func TestPartitionFSM_Close(t *testing.T) {
+	fsm := openFSM(t)
+	if _, err := fsm.Open(nil); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Write data so nextOffset > 0, forcing Read to access segment files.
+	batch := makeBatch(t, "msg", 100)
+	cmd := append([]byte{CmdAppendBatch}, batch...)
+	if _, err := fsm.Update([]sm.Entry{{Index: 1, Cmd: cmd}}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if err := fsm.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	_, err := fsm.Lookup(PartitionQuery{Type: QueryRead, Offset: 0, MaxBytes: 1 << 20})
+	if err == nil {
+		t.Fatal("Lookup after Close should return error, got nil")
 	}
 }
 

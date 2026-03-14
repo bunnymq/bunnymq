@@ -19,6 +19,7 @@ import (
 type PartitionFSM struct {
 	storage          stor.Storage
 	lastAppliedIndex atomic.Uint64
+	closed           atomic.Bool
 	sidecarPath      string
 	dir              string
 	cfg              *config.StorageConfig
@@ -105,8 +106,34 @@ func (fsm *PartitionFSM) persistApplied(index uint64) error {
 	return os.Rename(tmp, fsm.sidecarPath)
 }
 
-func (fsm *PartitionFSM) Lookup(_ any) (any, error) {
-	return nil, nil
+func (fsm *PartitionFSM) Lookup(query any) (any, error) {
+	if fsm.closed.Load() {
+		return nil, stor.ErrStorageClosed
+	}
+	q, ok := query.(PartitionQuery)
+	if !ok {
+		return nil, fmt.Errorf("partition: unexpected query type %T", query)
+	}
+	switch q.Type {
+	case QueryRead:
+		batches, nextOffset, err := fsm.storage.Read(q.Offset, q.MaxBytes)
+		if err != nil {
+			return nil, err
+		}
+		return PartitionLookupResult{Batches: batches, NextOffset: nextOffset}, nil
+	case QueryReadByTime:
+		batches, nextOffset, err := fsm.storage.ReadByTime(q.TimestampMs, q.MaxBytes)
+		if err != nil {
+			return nil, err
+		}
+		return PartitionLookupResult{Batches: batches, NextOffset: nextOffset}, nil
+	case QueryEarliestOffset:
+		return fsm.storage.EarliestOffset(), nil
+	case QueryLatestOffset:
+		return fsm.storage.LatestOffset(), nil
+	default:
+		return nil, fmt.Errorf("partition: unknown query type %q", q.Type)
+	}
 }
 
 func (fsm *PartitionFSM) PrepareSnapshot() (any, error) {
@@ -131,6 +158,7 @@ func (fsm *PartitionFSM) Close() error {
 	if fsm.storage == nil {
 		return nil
 	}
+	fsm.closed.Store(true)
 	return fsm.storage.Close()
 }
 
