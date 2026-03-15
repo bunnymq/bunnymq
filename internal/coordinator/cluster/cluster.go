@@ -565,9 +565,12 @@ func (cc *ClusterCoordinator) reconcileOnce(ctx context.Context) {
 }
 
 func (cc *ClusterCoordinator) startShard(shardID uint64, info shardInfo) {
-	nodeIDs := replicaNodeIDs(info.Peers)
-	join := cc.config.NodeID != slices.Min(nodeIDs)
-	if err := cc.raftHost.StartPartitionShard(shardID, info.Peers, join); err != nil {
+	// Per T-003: in a static cluster all replicas call StartPartitionShard with
+	// join=false and the full peer map. dragonboat handles both first-start and
+	// restart correctly: on first start it bootstraps the shard; on restart it
+	// validates the peer map against saved bootstrap info. join=true is only for
+	// dynamic membership changes (RequestAddReplica), which BunnyMQ v1 never does.
+	if err := cc.raftHost.StartPartitionShard(shardID, info.Peers, false); err != nil {
 		cc.logger.Warn("failed to start partition shard",
 			zap.Uint64("shard_id", shardID), zap.Error(err))
 		return
@@ -656,15 +659,6 @@ func (cc *ClusterCoordinator) sweepLeaders(ctx context.Context) {
 // partitionDir returns the storage directory for a partition.
 func partitionDir(dataDir, topic string, partitionID int32) string {
 	return filepath.Join(dataDir, "partitions", topic, fmt.Sprintf("%d", partitionID))
-}
-
-// replicaNodeIDs returns the node IDs from a peers map.
-func replicaNodeIDs(peers map[uint64]string) []uint64 {
-	ids := make([]uint64, 0, len(peers))
-	for id := range peers {
-		ids = append(ids, id)
-	}
-	return ids
 }
 
 // buildPeerMap builds a nodeID→raftAddress map for the given replica node IDs
