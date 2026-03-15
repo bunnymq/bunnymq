@@ -6,7 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"maps"
+	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -98,9 +102,18 @@ type NodeDescriptor struct {
 // raftHostIface is the subset of raft.Host used by ClusterCoordinator.
 type raftHostIface interface {
 	StartMetadataShard(initialMembers map[uint64]string, join bool, factory sm.CreateStateMachineFunc) error
+	StartPartitionShard(shardID uint64, initialMembers map[uint64]string, join bool) error
+	StopPartitionShard(shardID uint64) error
+	GetLeaderID(shardID uint64) (leaderID uint64, term uint64, valid bool, err error)
 	SyncProposeMetadata(ctx context.Context, cmd metadata.MetadataCommand) (sm.Result, error)
 	LookupMetadata(ctx context.Context, q metadata.MetadataQuery) (interface{}, error)
 	ProposePartition(ctx context.Context, shardID uint64, cmd partition.PartitionCommand) error
+}
+
+// DataCoordinatorIface is the subset of DataCoordinator used by ClusterCoordinator.
+type DataCoordinatorIface interface {
+	StartPartitionReplica(topic string, partitionID int32, shardID uint64)
+	StopPartitionReplica(topic string, partitionID int32, shardID uint64)
 }
 
 // ClusterCoordinator manages the topic and partition lifecycle for the cluster.
@@ -108,6 +121,7 @@ type raftHostIface interface {
 type ClusterCoordinator struct {
 	config          CoordinatorConfig
 	raftHost        raftHostIface
+	dataCoord       DataCoordinatorIface
 	shardMu         sync.RWMutex
 	runningShards   map[uint64]shardInfo
 	leaderMu        sync.Mutex
@@ -116,10 +130,11 @@ type ClusterCoordinator struct {
 }
 
 // NewClusterCoordinator creates a new ClusterCoordinator.
-func NewClusterCoordinator(cfg CoordinatorConfig, host raftHostIface, logger *zap.Logger) *ClusterCoordinator {
+func NewClusterCoordinator(cfg CoordinatorConfig, host raftHostIface, dataCoord DataCoordinatorIface, logger *zap.Logger) *ClusterCoordinator {
 	return &ClusterCoordinator{
 		config:          cfg,
 		raftHost:        host,
+		dataCoord:       dataCoord,
 		runningShards:   make(map[uint64]shardInfo),
 		lastKnownLeader: make(map[uint64]leaderRecord),
 		logger:          logger,
@@ -484,22 +499,187 @@ func topicInfoFromMeta(m *metadata.TopicMeta) TopicInfo {
 	}
 }
 
-// reconcileOnce is implemented in T-040; stub here satisfies Bootstrap and EagerReconcileOnCreate.
-func (cc *ClusterCoordinator) reconcileOnce(_ context.Context) {
-	cc.shardMu.RLock()
-	_ = cc.runningShards
-	cc.shardMu.RUnlock()
+func (cc *ClusterCoordinator) reconcileLoop(ctx context.Context) {
+	ticker := time.NewTicker(time.Duration(cc.config.ReconcileIntervalMs) * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			cc.reconcileOnce(ctx)
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
-// reconcileLoop is implemented in T-040.
-func (cc *ClusterCoordinator) reconcileLoop(_ context.Context) {}
-
-// leaderSweepLoop is implemented in T-040.
-func (cc *ClusterCoordinator) leaderSweepLoop(_ context.Context) {
-	cc.leaderMu.Lock()
-	for _, rec := range cc.lastKnownLeader {
-		_ = rec.nodeID
-		_ = rec.term
+func (cc *ClusterCoordinator) reconcileOnce(ctx context.Context) {
+	topicsRaw, err := cc.raftHost.LookupMetadata(ctx, metadata.MetadataQuery{Type: metadata.QueryListTopics})
+	if err != nil {
+		cc.logger.Warn("reconcile: metadata lookup topics failed", zap.Error(err))
+		return
 	}
-	cc.leaderMu.Unlock()
+	topics := topicsRaw.([]*metadata.TopicMeta)
+
+	nodesRaw, err := cc.raftHost.LookupMetadata(ctx, metadata.MetadataQuery{Type: metadata.QueryListNodes})
+	if err != nil {
+		cc.logger.Warn("reconcile: metadata lookup nodes failed", zap.Error(err))
+		return
+	}
+	nodes := nodesRaw.([]*metadata.NodeInfo)
+
+	expected := make(map[uint64]shardInfo)
+	for _, tm := range topics {
+		partsRaw, err := cc.raftHost.LookupMetadata(ctx, metadata.MetadataQuery{
+			Type:      metadata.QueryGetPartitions,
+			TopicName: tm.Name,
+		})
+		if err != nil {
+			cc.logger.Warn("reconcile: metadata lookup partitions failed",
+				zap.String("topic", tm.Name), zap.Error(err))
+			continue
+		}
+		for _, pm := range partsRaw.([]*metadata.PartitionMeta) {
+			if slices.Contains(pm.ReplicaNodeIDs, cc.config.NodeID) {
+				expected[pm.ShardID] = shardInfo{
+					Topic:       pm.Topic,
+					PartitionID: pm.PartitionID,
+					ShardID:     pm.ShardID,
+					Peers:       buildPeerMap(pm.ReplicaNodeIDs, nodes),
+				}
+			}
+		}
+	}
+
+	cc.shardMu.Lock()
+	defer cc.shardMu.Unlock()
+
+	for shardID, info := range expected {
+		if _, running := cc.runningShards[shardID]; !running {
+			go cc.startShard(shardID, info)
+		}
+	}
+	for shardID, info := range cc.runningShards {
+		if _, wanted := expected[shardID]; !wanted {
+			go cc.stopShard(shardID, info)
+		}
+	}
+}
+
+func (cc *ClusterCoordinator) startShard(shardID uint64, info shardInfo) {
+	nodeIDs := replicaNodeIDs(info.Peers)
+	join := cc.config.NodeID != slices.Min(nodeIDs)
+	if err := cc.raftHost.StartPartitionShard(shardID, info.Peers, join); err != nil {
+		cc.logger.Warn("failed to start partition shard",
+			zap.Uint64("shard_id", shardID), zap.Error(err))
+		return
+	}
+	cc.dataCoord.StartPartitionReplica(info.Topic, info.PartitionID, shardID)
+	cc.shardMu.Lock()
+	cc.runningShards[shardID] = info
+	cc.shardMu.Unlock()
+	cc.logger.Info("partition shard started",
+		zap.String("topic", info.Topic), zap.Int32("partition_id", info.PartitionID))
+}
+
+func (cc *ClusterCoordinator) stopShard(shardID uint64, info shardInfo) {
+	cc.dataCoord.StopPartitionReplica(info.Topic, info.PartitionID, shardID)
+	if err := cc.raftHost.StopPartitionShard(shardID); err != nil {
+		cc.logger.Warn("failed to stop partition shard",
+			zap.Uint64("shard_id", shardID), zap.Error(err))
+	}
+	cc.shardMu.Lock()
+	delete(cc.runningShards, shardID)
+	cc.shardMu.Unlock()
+	dir := partitionDir(cc.config.DataDir, info.Topic, info.PartitionID)
+	if err := os.RemoveAll(dir); err != nil {
+		cc.logger.Warn("failed to delete partition storage directory",
+			zap.String("dir", dir), zap.Error(err))
+	}
+	cc.logger.Info("partition shard stopped and storage removed",
+		zap.String("topic", info.Topic), zap.Int32("partition_id", info.PartitionID))
+}
+
+func (cc *ClusterCoordinator) leaderSweepLoop(ctx context.Context) {
+	ticker := time.NewTicker(time.Duration(cc.config.LeaderCheckIntervalMs) * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			cc.sweepLeaders(ctx)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (cc *ClusterCoordinator) sweepLeaders(ctx context.Context) {
+	cc.shardMu.RLock()
+	shards := maps.Clone(cc.runningShards)
+	cc.shardMu.RUnlock()
+
+	for shardID, info := range shards {
+		leaderID, term, valid, err := cc.raftHost.GetLeaderID(shardID)
+		if err != nil {
+			cc.logger.Warn("GetLeaderID failed",
+				zap.Uint64("shard_id", shardID), zap.Error(err))
+			continue
+		}
+		if !valid {
+			continue
+		}
+		cc.leaderMu.Lock()
+		last := cc.lastKnownLeader[shardID]
+		cc.leaderMu.Unlock()
+		if leaderID == last.nodeID && term == last.term {
+			continue
+		}
+		_, err = cc.raftHost.SyncProposeMetadata(ctx, metadata.MetadataCommand{
+			Type: metadata.CmdAssignPartitionLeader,
+			AssignPartitionLeader: &metadata.AssignPartitionLeaderCmd{
+				Topic:        info.Topic,
+				PartitionID:  info.PartitionID,
+				LeaderNodeID: leaderID,
+				LeaderEpoch:  int64(term),
+			},
+		})
+		if err != nil {
+			cc.logger.Warn("failed to update partition leader in metadata",
+				zap.String("topic", info.Topic), zap.Int32("partition_id", info.PartitionID),
+				zap.Uint64("leader_id", leaderID), zap.Error(err))
+			continue
+		}
+		cc.leaderMu.Lock()
+		cc.lastKnownLeader[shardID] = leaderRecord{nodeID: leaderID, term: term}
+		cc.leaderMu.Unlock()
+	}
+}
+
+// partitionDir returns the storage directory for a partition.
+func partitionDir(dataDir, topic string, partitionID int32) string {
+	return filepath.Join(dataDir, "partitions", topic, fmt.Sprintf("%d", partitionID))
+}
+
+// replicaNodeIDs returns the node IDs from a peers map.
+func replicaNodeIDs(peers map[uint64]string) []uint64 {
+	ids := make([]uint64, 0, len(peers))
+	for id := range peers {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// buildPeerMap builds a nodeID→address map for the given replica node IDs using
+// the cluster node list.
+func buildPeerMap(replicaIDs []uint64, nodes []*metadata.NodeInfo) map[uint64]string {
+	nodeMap := make(map[uint64]string, len(nodes))
+	for _, n := range nodes {
+		nodeMap[n.NodeID] = n.Address
+	}
+	peers := make(map[uint64]string, len(replicaIDs))
+	for _, id := range replicaIDs {
+		if addr, ok := nodeMap[id]; ok {
+			peers[id] = addr
+		}
+	}
+	return peers
 }
