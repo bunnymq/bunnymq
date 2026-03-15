@@ -47,8 +47,9 @@ func (f *fakeNodeHost) StartOnDiskReplica(_ map[uint64]string, _ bool, _ sm.Crea
 	return nil
 }
 
-func (f *fakeNodeHost) StopShard(_ uint64) error { return nil }
-func (f *fakeNodeHost) Close()                   {}
+func (f *fakeNodeHost) StopShard(_ uint64) error                           { return nil }
+func (f *fakeNodeHost) GetLeaderID(_ uint64) (uint64, uint64, bool, error) { return 0, 0, false, nil }
+func (f *fakeNodeHost) Close()                                             {}
 
 func fakeHost(nh *fakeNodeHost) *Host {
 	return &Host{

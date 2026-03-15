@@ -37,6 +37,7 @@ type nodeHostIface interface {
 	StartReplica(initialMembers map[uint64]string, join bool, create sm.CreateStateMachineFunc, cfg dbconfig.Config) error
 	StartOnDiskReplica(initialMembers map[uint64]string, join bool, create sm.CreateOnDiskStateMachineFunc, cfg dbconfig.Config) error
 	StopShard(shardID uint64) error
+	GetLeaderID(shardID uint64) (uint64, uint64, bool, error)
 	Close()
 }
 
@@ -79,6 +80,13 @@ func (h *Host) StartPartitionShard(shardID uint64, initialMembers map[uint64]str
 // StopPartitionShard stops a partition Raft shard on this node.
 func (h *Host) StopPartitionShard(shardID uint64) error {
 	return h.nh.StopShard(shardID)
+}
+
+// GetLeaderID returns the leader replica ID, Raft term, validity flag, and any
+// error for the given shard. valid=false means an election is in progress.
+// See T-002 for the verified dragonboat v4 signature.
+func (h *Host) GetLeaderID(shardID uint64) (leaderID uint64, term uint64, valid bool, err error) {
+	return h.nh.GetLeaderID(shardID)
 }
 
 // Close shuts down the NodeHost and all hosted shards.
