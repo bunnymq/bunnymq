@@ -34,6 +34,7 @@ var (
 type CoordinatorConfig struct {
 	NodeID                 uint64
 	RaftAddress            string
+	DataAddr               string
 	DataDir                string
 	Peers                  map[uint64]string
 	BootstrapTimeoutMs     int64
@@ -171,12 +172,17 @@ func (cc *ClusterCoordinator) Bootstrap(ctx context.Context) error {
 		}
 	}
 
-	// Step 3 — register this node.
+	// Step 3 — register this node with the Data API address so clients can
+	// look up the leader's gRPC endpoint via DescribeCluster/DescribeTopic.
+	regAddr := cc.config.DataAddr
+	if regAddr == "" {
+		regAddr = cc.config.RaftAddress
+	}
 	if _, err := cc.raftHost.SyncProposeMetadata(ctx, metadata.MetadataCommand{
 		Type: metadata.CmdRegisterNode,
 		RegisterNode: &metadata.RegisterNodeCmd{
 			NodeID:  cc.config.NodeID,
-			Address: cc.config.RaftAddress,
+			Address: regAddr,
 		},
 	}); err != nil {
 		return fmt.Errorf("register node: %w", err)
@@ -520,13 +526,6 @@ func (cc *ClusterCoordinator) reconcileOnce(ctx context.Context) {
 	}
 	topics := topicsRaw.([]*metadata.TopicMeta)
 
-	nodesRaw, err := cc.raftHost.LookupMetadata(ctx, metadata.MetadataQuery{Type: metadata.QueryListNodes})
-	if err != nil {
-		cc.logger.Warn("reconcile: metadata lookup nodes failed", zap.Error(err))
-		return
-	}
-	nodes := nodesRaw.([]*metadata.NodeInfo)
-
 	expected := make(map[uint64]shardInfo)
 	for _, tm := range topics {
 		partsRaw, err := cc.raftHost.LookupMetadata(ctx, metadata.MetadataQuery{
@@ -544,7 +543,7 @@ func (cc *ClusterCoordinator) reconcileOnce(ctx context.Context) {
 					Topic:       pm.Topic,
 					PartitionID: pm.PartitionID,
 					ShardID:     pm.ShardID,
-					Peers:       buildPeerMap(pm.ReplicaNodeIDs, nodes),
+					Peers:       buildPeerMap(pm.ReplicaNodeIDs, cc.config.Peers),
 				}
 			}
 		}
@@ -668,16 +667,13 @@ func replicaNodeIDs(peers map[uint64]string) []uint64 {
 	return ids
 }
 
-// buildPeerMap builds a nodeID→address map for the given replica node IDs using
-// the cluster node list.
-func buildPeerMap(replicaIDs []uint64, nodes []*metadata.NodeInfo) map[uint64]string {
-	nodeMap := make(map[uint64]string, len(nodes))
-	for _, n := range nodes {
-		nodeMap[n.NodeID] = n.Address
-	}
+// buildPeerMap builds a nodeID→raftAddress map for the given replica node IDs
+// using the static Raft peer config. The cluster is static in v1, so Raft
+// addresses are known at startup and do not need a metadata lookup.
+func buildPeerMap(replicaIDs []uint64, raftPeers map[uint64]string) map[uint64]string {
 	peers := make(map[uint64]string, len(replicaIDs))
 	for _, id := range replicaIDs {
-		if addr, ok := nodeMap[id]; ok {
+		if addr, ok := raftPeers[id]; ok {
 			peers[id] = addr
 		}
 	}
