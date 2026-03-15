@@ -27,6 +27,7 @@ const (
 	QueryReadByTime      PartitionQueryType = "read_by_time"
 	QueryEarliestOffset  PartitionQueryType = "earliest_offset"
 	QueryLatestOffset    PartitionQueryType = "latest_offset"
+	QueryGetNewDataCh    PartitionQueryType = "get_new_data_ch"
 )
 
 type PartitionQuery struct {

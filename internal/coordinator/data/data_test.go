@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"go.uber.org/zap"
@@ -239,5 +240,270 @@ func TestDataCoordinator_GetOffsetByTimestamp_NotFound(t *testing.T) {
 	_, err := dc.GetOffsetByTimestamp(context.Background(), testTopic, testPartID, 9999999)
 	if !errors.Is(err, ErrOffsetNotFound) {
 		t.Fatalf("expected ErrOffsetNotFound, got %v", err)
+	}
+}
+
+// makeFetchStub builds a stubRaftHost configured for Fetch tests.
+// metaFn is the LookupMetadata handler; partFn handles LookupPartition calls.
+func makeFetchStub(metaFn func(context.Context, metadata.MetadataQuery) (any, error),
+	partFn func(context.Context, uint64, partition.PartitionQuery) (any, error)) *stubRaftHost {
+	return &stubRaftHost{
+		lookupMetadataFn:  metaFn,
+		lookupPartitionFn: partFn,
+	}
+}
+
+func TestFetch_ImmediateData(t *testing.T) {
+	batch := []byte("batch-data")
+	stub := makeFetchStub(
+		func(_ context.Context, _ metadata.MetadataQuery) (any, error) {
+			return leaderMeta(), nil
+		},
+		func(_ context.Context, _ uint64, q partition.PartitionQuery) (any, error) {
+			if q.Type != partition.QueryRead {
+				t.Errorf("expected QueryRead, got %q", q.Type)
+			}
+			return partition.PartitionLookupResult{Batches: batch, NextOffset: 10}, nil
+		},
+	)
+	dc := newCoord(stub)
+	dc.StartPartitionReplica(testTopic, testPartID, testShardID)
+
+	records, next, err := dc.Fetch(context.Background(), testTopic, testPartID, 0, 1024, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(records) != string(batch) {
+		t.Fatalf("expected %q, got %q", batch, records)
+	}
+	if next != 10 {
+		t.Fatalf("expected nextOffset=10, got %d", next)
+	}
+}
+
+func TestFetch_NoDataNoWait(t *testing.T) {
+	stub := makeFetchStub(
+		func(_ context.Context, _ metadata.MetadataQuery) (any, error) {
+			return leaderMeta(), nil
+		},
+		func(_ context.Context, _ uint64, q partition.PartitionQuery) (any, error) {
+			return partition.PartitionLookupResult{Batches: nil, NextOffset: 0}, nil
+		},
+	)
+	dc := newCoord(stub)
+	dc.StartPartitionReplica(testTopic, testPartID, testShardID)
+
+	records, next, err := dc.Fetch(context.Background(), testTopic, testPartID, 0, 1024, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if records != nil || next != 0 {
+		t.Fatalf("expected (nil, 0, nil), got (%v, %d, %v)", records, next, err)
+	}
+}
+
+func TestFetch_LongPollWakesOnData(t *testing.T) {
+	ch := make(chan struct{})
+	callCount := 0
+
+	stub := makeFetchStub(
+		func(_ context.Context, _ metadata.MetadataQuery) (any, error) {
+			return leaderMeta(), nil
+		},
+		func(_ context.Context, _ uint64, q partition.PartitionQuery) (any, error) {
+			switch q.Type {
+			case partition.QueryGetNewDataCh:
+				return (<-chan struct{})(ch), nil
+			case partition.QueryRead:
+				callCount++
+				if callCount >= 2 {
+					return partition.PartitionLookupResult{Batches: []byte("data"), NextOffset: 1}, nil
+				}
+				return partition.PartitionLookupResult{Batches: nil, NextOffset: 0}, nil
+			}
+			return nil, nil
+		},
+	)
+	dc := newCoord(stub)
+	dc.StartPartitionReplica(testTopic, testPartID, testShardID)
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		close(ch)
+	}()
+
+	records, _, err := dc.Fetch(context.Background(), testTopic, testPartID, 0, 1024, 5000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(records) != "data" {
+		t.Fatalf("expected data, got %q", records)
+	}
+}
+
+func TestFetch_LongPollTimeout(t *testing.T) {
+	ch := make(chan struct{}) // never closed
+
+	stub := makeFetchStub(
+		func(_ context.Context, _ metadata.MetadataQuery) (any, error) {
+			return leaderMeta(), nil
+		},
+		func(_ context.Context, _ uint64, q partition.PartitionQuery) (any, error) {
+			switch q.Type {
+			case partition.QueryGetNewDataCh:
+				return (<-chan struct{})(ch), nil
+			case partition.QueryRead:
+				return partition.PartitionLookupResult{Batches: nil, NextOffset: 0}, nil
+			}
+			return nil, nil
+		},
+	)
+	dc := newCoord(stub)
+	dc.StartPartitionReplica(testTopic, testPartID, testShardID)
+
+	start := time.Now()
+	records, next, err := dc.Fetch(context.Background(), testTopic, testPartID, 0, 1024, 50)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if records != nil || next != 0 {
+		t.Fatalf("expected (nil, 0, nil) on timeout, got (%v, %d)", records, next)
+	}
+	if elapsed < 40*time.Millisecond {
+		t.Fatalf("returned too early: %v", elapsed)
+	}
+}
+
+func TestFetch_LongPollCtxCancel(t *testing.T) {
+	ch := make(chan struct{}) // never closed
+
+	stub := makeFetchStub(
+		func(_ context.Context, _ metadata.MetadataQuery) (any, error) {
+			return leaderMeta(), nil
+		},
+		func(_ context.Context, _ uint64, q partition.PartitionQuery) (any, error) {
+			switch q.Type {
+			case partition.QueryGetNewDataCh:
+				return (<-chan struct{})(ch), nil
+			case partition.QueryRead:
+				return partition.PartitionLookupResult{Batches: nil, NextOffset: 0}, nil
+			}
+			return nil, nil
+		},
+	)
+	dc := newCoord(stub)
+	dc.StartPartitionReplica(testTopic, testPartID, testShardID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	_, _, err := dc.Fetch(ctx, testTopic, testPartID, 0, 1024, 10000)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestFetch_LongPollLeaderChange(t *testing.T) {
+	ch := make(chan struct{})
+	metaCallCount := 0
+
+	stub := makeFetchStub(
+		func(_ context.Context, q metadata.MetadataQuery) (any, error) {
+			if q.Type == metadata.QueryGetPartition {
+				metaCallCount++
+				if metaCallCount == 1 {
+					// First call: leaderCheck passes (this node is leader).
+					return leaderMeta(), nil
+				}
+				// Subsequent calls (inside long-poll loop): different leader.
+				return &metadata.PartitionMeta{
+					Topic:        testTopic,
+					PartitionID:  testPartID,
+					ShardID:      testShardID,
+					LeaderNodeID: 2,
+				}, nil
+			}
+			// QueryListNodes for nodeAddress lookup.
+			return []*metadata.NodeInfo{{NodeID: 2, Address: "other:9090"}}, nil
+		},
+		func(_ context.Context, _ uint64, q partition.PartitionQuery) (any, error) {
+			switch q.Type {
+			case partition.QueryGetNewDataCh:
+				return (<-chan struct{})(ch), nil
+			case partition.QueryRead:
+				return partition.PartitionLookupResult{Batches: nil, NextOffset: 0}, nil
+			}
+			return nil, nil
+		},
+	)
+	dc := newCoord(stub)
+	dc.StartPartitionReplica(testTopic, testPartID, testShardID)
+
+	_, _, err := dc.Fetch(context.Background(), testTopic, testPartID, 0, 1024, 5000)
+	var notLeader *NotLeaderError
+	if !errors.As(err, &notLeader) {
+		t.Fatalf("expected *NotLeaderError, got %T: %v", err, err)
+	}
+	if notLeader.LeaderNodeID != 2 {
+		t.Fatalf("expected LeaderNodeID=2, got %d", notLeader.LeaderNodeID)
+	}
+}
+
+func TestFetch_NewDataCh_RaceElimination(t *testing.T) {
+	const iters = 200
+
+	for range iters {
+		batch := []byte("race-batch")
+		ch := make(chan struct{})
+
+		var readMu sync.Mutex
+		dataReady := false
+
+		stub := makeFetchStub(
+			func(_ context.Context, _ metadata.MetadataQuery) (any, error) {
+				return leaderMeta(), nil
+			},
+			func(_ context.Context, _ uint64, q partition.PartitionQuery) (any, error) {
+				switch q.Type {
+				case partition.QueryGetNewDataCh:
+					return (<-chan struct{})(ch), nil
+				case partition.QueryRead:
+					readMu.Lock()
+					ready := dataReady
+					readMu.Unlock()
+					if ready {
+						return partition.PartitionLookupResult{Batches: batch, NextOffset: 1}, nil
+					}
+					return partition.PartitionLookupResult{Batches: nil, NextOffset: 0}, nil
+				}
+				return nil, nil
+			},
+		)
+		dc := newCoord(stub)
+		dc.StartPartitionReplica(testTopic, testPartID, testShardID)
+
+		// Simulate a concurrent append: set dataReady and close the channel.
+		go func() {
+			readMu.Lock()
+			dataReady = true
+			readMu.Unlock()
+			close(ch)
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		records, _, err := dc.Fetch(ctx, testTopic, testPartID, 0, 1024, 1000)
+		cancel()
+
+		if err != nil {
+			t.Fatalf("iter: unexpected error: %v", err)
+		}
+		if string(records) != string(batch) {
+			t.Fatalf("iter: expected batch data, got %q", records)
+		}
 	}
 }

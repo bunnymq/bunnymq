@@ -222,7 +222,9 @@ func (dc *DataCoordinator) Produce(
 	return -1, nil
 }
 
-// Fetch — implemented in T-042.
+// Fetch returns up to maxBytes of serialised batch data starting at offset.
+// If no records are available and maxWaitMs > 0, blocks until records arrive,
+// the deadline elapses, a leader change is detected, or ctx is cancelled.
 func (dc *DataCoordinator) Fetch(
 	ctx context.Context,
 	topic string,
@@ -231,7 +233,85 @@ func (dc *DataCoordinator) Fetch(
 	maxBytes int,
 	maxWaitMs int64,
 ) ([]byte, int64, error) {
-	return nil, 0, errors.New("not implemented")
+	shardID, err := dc.leaderCheck(ctx, topic, partitionID)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if maxWaitMs == 0 {
+		result, err := dc.raftHost.LookupPartition(ctx, shardID, partition.PartitionQuery{
+			Type: partition.QueryRead, Offset: offset, MaxBytes: maxBytes,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		r := result.(partition.PartitionLookupResult)
+		return r.Batches, r.NextOffset, nil
+	}
+
+	return dc.fetchWithLongPoll(ctx, topic, partitionID, shardID, offset, maxBytes, maxWaitMs)
+}
+
+func (dc *DataCoordinator) fetchWithLongPoll(
+	ctx context.Context,
+	topic string,
+	partitionID int32,
+	shardID uint64,
+	offset int64,
+	maxBytes int,
+	maxWaitMs int64,
+) ([]byte, int64, error) {
+	deadline := time.Now().Add(time.Duration(maxWaitMs) * time.Millisecond)
+
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, 0, nil
+		}
+
+		// Snapshot newDataCh BEFORE reading to eliminate the race where a batch
+		// arrives between the Read and the channel snapshot.
+		chResult, err := dc.raftHost.LookupPartition(ctx, shardID, partition.PartitionQuery{
+			Type: partition.QueryGetNewDataCh,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		ch := chResult.(<-chan struct{})
+
+		// Re-verify leadership on each iteration — leader may change during a wait.
+		metaResult, err := dc.raftHost.LookupMetadata(ctx, metadata.MetadataQuery{
+			Type: metadata.QueryGetPartition, TopicName: topic, PartitionID: partitionID,
+		})
+		if err != nil || metaResult == nil {
+			return nil, 0, ErrUnavailable
+		}
+		pm := metaResult.(*metadata.PartitionMeta)
+		if pm.LeaderNodeID != dc.config.NodeID {
+			addr := dc.nodeAddress(ctx, pm.LeaderNodeID)
+			return nil, 0, &NotLeaderError{LeaderNodeID: pm.LeaderNodeID, LeaderAddress: addr}
+		}
+
+		readResult, err := dc.raftHost.LookupPartition(ctx, shardID, partition.PartitionQuery{
+			Type: partition.QueryRead, Offset: offset, MaxBytes: maxBytes,
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		r := readResult.(partition.PartitionLookupResult)
+		if len(r.Batches) > 0 {
+			return r.Batches, r.NextOffset, nil
+		}
+
+		select {
+		case <-ch:
+			continue
+		case <-time.After(remaining):
+			return nil, 0, nil
+		case <-ctx.Done():
+			return nil, 0, ctx.Err()
+		}
+	}
 }
 
 // GetEarliestOffset returns the base_offset of the oldest available batch.
