@@ -157,6 +157,37 @@ func waitClusterReady(t *testing.T, adminAddr string, expectedNodes int, timeout
 	t.Fatalf("cluster did not reach %d nodes within %s", expectedNodes, timeout)
 }
 
+// waitLeaderChanged polls DescribeTopic for partition 0 until its LeaderNodeID is
+// non-zero AND different from killedNodeID. This ensures the ClusterCoordinator has
+// run its leader sweep and the metadata FSM reflects the NEW leader.
+func waitLeaderChanged(t *testing.T, adminAddr string, topic string, killedNodeID uint64, timeout time.Duration) {
+	t.Helper()
+	ac, err := client.NewAdminClient(client.Config{
+		BootstrapServers: []string{adminAddr},
+		RequestTimeout:   2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new admin client for waitLeaderChanged: %v", err)
+	}
+	defer ac.Close() //nolint:errcheck
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		desc, err := ac.DescribeTopic(ctx, topic)
+		cancel()
+		if err == nil {
+			for _, p := range desc.Partitions {
+				if p.PartitionID == 0 && p.LeaderNodeID != 0 && p.LeaderNodeID != killedNodeID {
+					return
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("partition 0 leader did not change away from node %d within %s", killedNodeID, timeout)
+}
+
 // waitPartitionsLeaders polls DescribeTopic until all partitions have a non-zero
 // LeaderNodeID or timeout is reached.
 func waitPartitionsLeaders(t *testing.T, adminAddr string, topic string, partitionCount int, timeout time.Duration) {
@@ -502,8 +533,8 @@ func TestCluster_LeaderFailover(t *testing.T) {
 
 	nodes := []clusterNode{
 		{1, 49093, 49091, 49092},
-		{2, 59093, 59091, 59092},
-		{3, 69093, 69091, 69092},
+		{2, 50093, 50091, 50092},
+		{3, 51093, 51091, 51092},
 	}
 	peers := clusterPeers(nodes)
 
@@ -604,9 +635,9 @@ func TestCluster_LeaderFailover_FetchDuringElection(t *testing.T) {
 	}
 
 	nodes := []clusterNode{
-		{1, 79093, 79091, 79092},
-		{2, 89093, 89091, 89092},
-		{3, 99093, 99091, 99092},
+		{1, 52093, 52091, 52092},
+		{2, 53093, 53091, 53092},
+		{3, 54093, 54091, 54092},
 	}
 	peers := clusterPeers(nodes)
 
@@ -648,13 +679,15 @@ func TestCluster_LeaderFailover_FetchDuringElection(t *testing.T) {
 	}
 
 	// SIGKILL the leader.
-	t.Logf("killing leader node %d (index %d) for FetchDuringElection", nodes[leaderIdx].id, leaderIdx)
+	killedNodeID := nodes[leaderIdx].id
+	t.Logf("killing leader node %d (index %d) for FetchDuringElection", killedNodeID, leaderIdx)
 	if err = cmds[leaderIdx].Process.Kill(); err != nil {
 		t.Fatalf("kill leader: %v", err)
 	}
 	_ = cmds[leaderIdx].Wait()
 
-	waitPartitionsLeaders(t, survivorMgmtAddr, "failover-fetch-topic", 1, 15*time.Second)
+	// Wait until the metadata FSM reflects the NEW leader (not the dead node).
+	waitLeaderChanged(t, survivorMgmtAddr, "failover-fetch-topic", killedNodeID, 15*time.Second)
 
 	cons, err := client.NewConsumer(client.ConsumerConfig{
 		Config: client.Config{

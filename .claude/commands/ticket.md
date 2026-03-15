@@ -77,6 +77,16 @@ golangci-lint run ./...
 
 All issues must be resolved before opening the PR. CI runs golangci-lint and will fail the PR if there are any issues.
 
+## Step 6.6 — Run integration tests (if applicable)
+
+If any files under `internal/integration/` were created or modified, run:
+
+```bash
+go test -tags integration -timeout 180s ./internal/integration/...
+```
+
+All integration tests must pass before opening the PR. Do not skip this step even if `go build` and the linter pass — integration tests spin up real broker processes and catch failures invisible to static analysis.
+
 ## Step 7 — Commit
 
 Stage and commit all new and modified files:
