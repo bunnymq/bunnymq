@@ -101,6 +101,11 @@ func (h *Host) SyncProposeMetadata(ctx context.Context, cmd metadata.MetadataCom
 	if err != nil {
 		return sm.Result{}, err
 	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultProposeTimeout)
+		defer cancel()
+	}
 	session := h.nh.GetNoOPSession(metadataShardID)
 	return h.nh.SyncPropose(ctx, session, data)
 }
@@ -132,6 +137,11 @@ func (h *Host) LookupMetadata(ctx context.Context, q metadata.MetadataQuery) (in
 
 // SyncProposePartition proposes a partition command and blocks until quorum commit.
 func (h *Host) SyncProposePartition(ctx context.Context, shardID uint64, cmd partition.PartitionCommand) (sm.Result, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultProposeTimeout)
+		defer cancel()
+	}
 	session := h.nh.GetNoOPSession(shardID)
 	return h.nh.SyncPropose(ctx, session, cmd.Marshal())
 }
