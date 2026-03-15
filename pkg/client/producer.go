@@ -12,6 +12,7 @@ import (
 	iclient "github.com/bunnymq/bunnymq/internal/client"
 	pb "github.com/bunnymq/bunnymq/pkg/proto/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -269,6 +270,17 @@ func (p *Producer) sendToPartition(
 
 		bunnyErr, notLeader := extractErr(rpcErr)
 		if bunnyErr == nil {
+			// gRPC transport-level Unavailable (e.g., connection refused after leader
+			// crash): invalidate the cached leader and retry so the next attempt
+			// discovers the new leader via refreshMeta.
+			if st, ok := status.FromError(rpcErr); ok && st.Code() == codes.Unavailable {
+				p.meta.Invalidate(topic)
+				if attempt >= p.config.RetryPolicy.MaxRetries {
+					return -1, rpcErr
+				}
+				time.Sleep(calcBackoff(attempt, p.config.RetryPolicy))
+				continue
+			}
 			return -1, rpcErr
 		}
 

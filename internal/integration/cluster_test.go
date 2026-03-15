@@ -157,6 +157,37 @@ func waitClusterReady(t *testing.T, adminAddr string, expectedNodes int, timeout
 	t.Fatalf("cluster did not reach %d nodes within %s", expectedNodes, timeout)
 }
 
+// waitLeaderChanged polls DescribeTopic for partition 0 until its LeaderNodeID is
+// non-zero AND different from killedNodeID. This ensures the ClusterCoordinator has
+// run its leader sweep and the metadata FSM reflects the NEW leader.
+func waitLeaderChanged(t *testing.T, adminAddr string, topic string, killedNodeID uint64, timeout time.Duration) {
+	t.Helper()
+	ac, err := client.NewAdminClient(client.Config{
+		BootstrapServers: []string{adminAddr},
+		RequestTimeout:   2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new admin client for waitLeaderChanged: %v", err)
+	}
+	defer ac.Close() //nolint:errcheck
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		desc, err := ac.DescribeTopic(ctx, topic)
+		cancel()
+		if err == nil {
+			for _, p := range desc.Partitions {
+				if p.PartitionID == 0 && p.LeaderNodeID != 0 && p.LeaderNodeID != killedNodeID {
+					return
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("partition 0 leader did not change away from node %d within %s", killedNodeID, timeout)
+}
+
 // waitPartitionsLeaders polls DescribeTopic until all partitions have a non-zero
 // LeaderNodeID or timeout is reached.
 func waitPartitionsLeaders(t *testing.T, adminAddr string, topic string, partitionCount int, timeout time.Duration) {
@@ -379,5 +410,330 @@ func checkConsumedContent(t *testing.T, produced [][]producedBatch, received [][
 				t.Errorf("partition %d record %d: got %q, want %q", p, i, got, want)
 			}
 		}
+	}
+}
+
+// clusterNode describes one broker in a multi-node test cluster.
+type clusterNode struct {
+	id       uint64
+	raftPort int
+	mgmtPort int
+	dataPort int
+}
+
+// clusterBootstrapAddrs returns the management addresses of all nodes.
+func clusterBootstrapAddrs(nodes []clusterNode) []string {
+	addrs := make([]string, len(nodes))
+	for i, n := range nodes {
+		addrs[i] = fmt.Sprintf("localhost:%d", n.mgmtPort)
+	}
+	return addrs
+}
+
+// clusterPeers returns the raft peer map for all nodes.
+func clusterPeers(nodes []clusterNode) map[uint64]string {
+	peers := make(map[uint64]string, len(nodes))
+	for _, n := range nodes {
+		peers[n.id] = fmt.Sprintf("localhost:%d", n.raftPort)
+	}
+	return peers
+}
+
+// failoverProducer creates a Producer with aggressive retries suited for a leader-failover window.
+func failoverProducer(t *testing.T, bootstrapAddrs []string) *client.Producer {
+	t.Helper()
+	prod, err := client.NewProducer(client.ProducerConfig{
+		Config: client.Config{
+			BootstrapServers: bootstrapAddrs,
+			RequestTimeout:   10 * time.Second,
+			RetryPolicy: client.RetryPolicy{
+				MaxRetries:     10,
+				InitialBackoff: 200 * time.Millisecond,
+				MaxBackoff:     3 * time.Second,
+				BackoffFactor:  2.0,
+			},
+		},
+		DefaultAcks: client.AcksAll,
+	})
+	if err != nil {
+		t.Fatalf("new failover producer: %v", err)
+	}
+	return prod
+}
+
+// sendOneBatch encodes a single-record batch and sends it, returning the produced offset and value.
+func sendOneBatch(t *testing.T, ctx context.Context, prod *client.Producer, topic string, partition int32, batchIdx int, prefix string, timeout time.Duration) producedBatch {
+	t.Helper()
+	val := fmt.Sprintf("%s-%d", prefix, batchIdx)
+	batchData, err := storage.EncodeBatch([]storage.Record{
+		{TimestampMs: time.Now().UnixMilli(), Value: []byte(val)},
+	})
+	if err != nil {
+		t.Fatalf("encode batch %s-%d: %v", prefix, batchIdx, err)
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, timeout)
+	offset, err := prod.SendBatch(sendCtx, topic, partition, batchData, client.AcksAll)
+	cancel()
+	if err != nil {
+		t.Fatalf("SendBatch %s-%d: %v", prefix, batchIdx, err)
+	}
+	return producedBatch{offset: offset, value: val}
+}
+
+// checkSequentialOffsets verifies that produced batches have no gaps or duplicates.
+func checkSequentialOffsets(t *testing.T, produced []producedBatch) {
+	t.Helper()
+	for i := 1; i < len(produced); i++ {
+		if produced[i].offset != produced[i-1].offset+1 {
+			t.Errorf("offset gap at batch %d: %d → %d", i, produced[i-1].offset, produced[i].offset)
+		}
+	}
+}
+
+// findLeaderIdx returns the index into nodes of the current leader for partition 0,
+// plus the mgmt address of one surviving (non-leader) node.
+func findLeaderIdx(t *testing.T, ac *client.AdminClient, topic string, nodes []clusterNode) (leaderIdx int, survivorMgmtAddr string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	desc, err := ac.DescribeTopic(ctx, topic)
+	cancel()
+	if err != nil {
+		t.Fatalf("DescribeTopic: %v", err)
+	}
+	var leaderNodeID uint64
+	for _, p := range desc.Partitions {
+		if p.PartitionID == 0 {
+			leaderNodeID = p.LeaderNodeID
+		}
+	}
+	if leaderNodeID == 0 {
+		t.Fatalf("partition 0 has no leader in DescribeTopic response")
+	}
+	leaderIdx = -1
+	for i, n := range nodes {
+		if n.id == leaderNodeID {
+			leaderIdx = i
+		} else if survivorMgmtAddr == "" {
+			survivorMgmtAddr = fmt.Sprintf("localhost:%d", n.mgmtPort)
+		}
+	}
+	if leaderIdx < 0 {
+		t.Fatalf("leader nodeID %d not found in node list", leaderNodeID)
+	}
+	return leaderIdx, survivorMgmtAddr
+}
+
+// TestCluster_LeaderFailover starts a 3-node cluster, produces 5 batches, kills the
+// partition leader, verifies produce and fetch resume on the new leader with sequential
+// offsets, and confirms the killed broker can rejoin.
+func TestCluster_LeaderFailover(t *testing.T) {
+	if brokerBinary == "" {
+		t.Skip("broker binary not available; skipping cluster test")
+	}
+
+	nodes := []clusterNode{
+		{1, 49093, 49091, 49092},
+		{2, 50093, 50091, 50092},
+		{3, 51093, 51091, 51092},
+	}
+	peers := clusterPeers(nodes)
+
+	cmds := make([]*exec.Cmd, len(nodes))
+	dataDirs := make([]string, len(nodes))
+	for i, n := range nodes {
+		dataDirs[i] = t.TempDir()
+		cmds[i] = startBroker(t, n.id, n.raftPort, n.mgmtPort, n.dataPort, dataDirs[i], peers)
+	}
+
+	adminAddr := fmt.Sprintf("localhost:%d", nodes[0].mgmtPort)
+	waitClusterReady(t, adminAddr, 3, 30*time.Second)
+
+	ac, err := client.NewAdminClient(client.Config{
+		BootstrapServers: []string{adminAddr},
+		RequestTimeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new admin client: %v", err)
+	}
+	defer ac.Close() //nolint:errcheck
+
+	ctx := context.Background()
+	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+		Name:              "failover-topic",
+		PartitionCount:    1,
+		ReplicationFactor: 3,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	waitPartitionsLeaders(t, adminAddr, "failover-topic", 1, 15*time.Second)
+
+	leaderIdx, survivorMgmtAddr := findLeaderIdx(t, ac, "failover-topic", nodes)
+	bootstrapAddrs := clusterBootstrapAddrs(nodes)
+
+	prod := failoverProducer(t, bootstrapAddrs)
+	defer prod.Close() //nolint:errcheck
+
+	produced := make([]producedBatch, 0, 10)
+	for b := 0; b < 5; b++ {
+		produced = append(produced, sendOneBatch(t, ctx, prod, "failover-topic", 0, b, "failover-batch", 15*time.Second))
+	}
+
+	// SIGKILL the leader — simulates a crash (no graceful dragonboat shutdown).
+	t.Logf("killing leader node %d (index %d)", nodes[leaderIdx].id, leaderIdx)
+	if err = cmds[leaderIdx].Process.Kill(); err != nil {
+		t.Fatalf("kill leader: %v", err)
+	}
+	_ = cmds[leaderIdx].Wait()
+
+	// Produce batch 5 (expected offset 5); producer retries through the election window.
+	b5 := sendOneBatch(t, ctx, prod, "failover-topic", 0, 5, "failover-batch", 30*time.Second)
+	if b5.offset != 5 {
+		t.Errorf("post-failover batch 5: expected offset 5, got %d", b5.offset)
+	}
+	produced = append(produced, b5)
+
+	for b := 6; b < 10; b++ {
+		produced = append(produced, sendOneBatch(t, ctx, prod, "failover-topic", 0, b, "failover-batch", 15*time.Second))
+	}
+
+	checkSequentialOffsets(t, produced)
+
+	cons, err := client.NewConsumer(client.ConsumerConfig{
+		Config: client.Config{
+			BootstrapServers: bootstrapAddrs,
+			RequestTimeout:   10 * time.Second,
+		},
+		MaxFetchBytes:  1 << 20,
+		MaxFetchWaitMs: 5000,
+	})
+	if err != nil {
+		t.Fatalf("new consumer: %v", err)
+	}
+	defer cons.Close() //nolint:errcheck
+
+	cons.Seek("failover-topic", 0, 0)
+	received := consumeAtLeast(t, cons, 1, 10, 30*time.Second)
+	for i, rec := range received[0][:10] {
+		if string(rec.Value) != produced[i].value {
+			t.Errorf("record %d: got %q, want %q", i, rec.Value, produced[i].value)
+		}
+	}
+
+	// Restart the killed broker with the same dataDir so dragonboat replays the log.
+	startBroker(t, nodes[leaderIdx].id, nodes[leaderIdx].raftPort,
+		nodes[leaderIdx].mgmtPort, nodes[leaderIdx].dataPort,
+		dataDirs[leaderIdx], peers)
+	waitClusterReady(t, survivorMgmtAddr, 3, 30*time.Second)
+}
+
+// TestCluster_LeaderFailover_FetchDuringElection verifies that a long-poll consumer
+// targeting the new leader receives the next batch in a single Poll call after a
+// leader change — confirming server-side newDataCh notification works on the new leader.
+func TestCluster_LeaderFailover_FetchDuringElection(t *testing.T) {
+	if brokerBinary == "" {
+		t.Skip("broker binary not available; skipping cluster test")
+	}
+
+	nodes := []clusterNode{
+		{1, 52093, 52091, 52092},
+		{2, 53093, 53091, 53092},
+		{3, 54093, 54091, 54092},
+	}
+	peers := clusterPeers(nodes)
+
+	cmds := make([]*exec.Cmd, len(nodes))
+	for i, n := range nodes {
+		cmds[i] = startBroker(t, n.id, n.raftPort, n.mgmtPort, n.dataPort, t.TempDir(), peers)
+	}
+
+	adminAddr := fmt.Sprintf("localhost:%d", nodes[0].mgmtPort)
+	waitClusterReady(t, adminAddr, 3, 30*time.Second)
+
+	ac, err := client.NewAdminClient(client.Config{
+		BootstrapServers: []string{adminAddr},
+		RequestTimeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new admin client: %v", err)
+	}
+	defer ac.Close() //nolint:errcheck
+
+	ctx := context.Background()
+	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+		Name:              "failover-fetch-topic",
+		PartitionCount:    1,
+		ReplicationFactor: 3,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	waitPartitionsLeaders(t, adminAddr, "failover-fetch-topic", 1, 15*time.Second)
+
+	leaderIdx, survivorMgmtAddr := findLeaderIdx(t, ac, "failover-fetch-topic", nodes)
+	bootstrapAddrs := clusterBootstrapAddrs(nodes)
+
+	prod := failoverProducer(t, bootstrapAddrs)
+	defer prod.Close() //nolint:errcheck
+
+	for b := 0; b < 5; b++ {
+		sendOneBatch(t, ctx, prod, "failover-fetch-topic", 0, b, "fetch-election-batch", 15*time.Second)
+	}
+
+	// SIGKILL the leader.
+	killedNodeID := nodes[leaderIdx].id
+	t.Logf("killing leader node %d (index %d) for FetchDuringElection", killedNodeID, leaderIdx)
+	if err = cmds[leaderIdx].Process.Kill(); err != nil {
+		t.Fatalf("kill leader: %v", err)
+	}
+	_ = cmds[leaderIdx].Wait()
+
+	// Wait until the metadata FSM reflects the NEW leader (not the dead node).
+	waitLeaderChanged(t, survivorMgmtAddr, "failover-fetch-topic", killedNodeID, 15*time.Second)
+
+	cons, err := client.NewConsumer(client.ConsumerConfig{
+		Config: client.Config{
+			BootstrapServers: bootstrapAddrs,
+			RequestTimeout:   10 * time.Second,
+		},
+		MaxFetchBytes:  1 << 20,
+		MaxFetchWaitMs: 5000,
+	})
+	if err != nil {
+		t.Fatalf("new consumer: %v", err)
+	}
+	defer cons.Close() //nolint:errcheck
+	cons.Seek("failover-fetch-topic", 0, 5)
+
+	type pollResult struct {
+		recs []client.Record
+		err  error
+	}
+	pollCh := make(chan pollResult, 1)
+	go func() {
+		pollCtx, pollCancel := context.WithTimeout(ctx, 15*time.Second)
+		defer pollCancel()
+		recs, fetchErr := cons.Poll(pollCtx, 5000)
+		pollCh <- pollResult{recs, fetchErr}
+	}()
+
+	// Allow time for the Fetch RPC to reach the new leader and enter its long-poll wait.
+	time.Sleep(time.Second)
+
+	trigger := sendOneBatch(t, ctx, prod, "failover-fetch-topic", 0, 5, "fetch-election-batch", 15*time.Second)
+	if trigger.offset != 5 {
+		t.Errorf("trigger batch offset: got %d, want 5", trigger.offset)
+	}
+
+	select {
+	case result := <-pollCh:
+		if result.err != nil {
+			t.Fatalf("long-poll Poll: %v", result.err)
+		}
+		if len(result.recs) == 0 {
+			t.Error("long-poll returned no records; expected batch at offset 5")
+		} else if string(result.recs[0].Value) != trigger.value {
+			t.Errorf("long-poll record value: got %q, want %q", result.recs[0].Value, trigger.value)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("long-poll did not return within 15s after producing batch 5")
 	}
 }
