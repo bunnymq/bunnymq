@@ -24,6 +24,7 @@ func NewMetadataFSM() *MetadataFSM {
 			Partitions:  make(map[PartitionKey]*PartitionMeta),
 			Nodes:       make(map[uint64]*NodeInfo),
 			Groups:      make(map[string]*ConsumerGroupMeta),
+			GroupStates: make(map[string]*GroupState),
 			NextShardID: 1,
 		},
 	}
@@ -176,6 +177,10 @@ type joinResult struct {
 }
 
 func (fsm *MetadataFSM) applyJoinConsumerGroup(cmd *JoinConsumerGroupCmd) sm.Result {
+	if cmd.Member != nil {
+		return fsm.applyGroupStateJoin(cmd)
+	}
+
 	group, exists := fsm.state.Groups[cmd.GroupID]
 	if !exists {
 		group = &ConsumerGroupMeta{
@@ -214,7 +219,39 @@ func (fsm *MetadataFSM) applyJoinConsumerGroup(cmd *JoinConsumerGroupCmd) sm.Res
 	return sm.Result{Value: ResultOK, Data: data}
 }
 
+// applyGroupStateJoin handles JoinConsumerGroupCmd when the coordinator has
+// pre-computed the assignment. The FSM stores the member and assignment without
+// running rebalance itself.
+func (fsm *MetadataFSM) applyGroupStateJoin(cmd *JoinConsumerGroupCmd) sm.Result {
+	if fsm.state.GroupStates == nil {
+		fsm.state.GroupStates = make(map[string]*GroupState)
+	}
+	group, exists := fsm.state.GroupStates[cmd.GroupID]
+	if !exists {
+		group = &GroupState{
+			GroupID:     cmd.GroupID,
+			Members:     make(map[string]MemberState),
+			Assignments: make(map[string][]TopicPartition),
+			Offsets:     make(map[TopicPartition]int64),
+		}
+		fsm.state.GroupStates[cmd.GroupID] = group
+	}
+	group.Members[cmd.MemberID] = *cmd.Member
+	if cmd.NewAssignment != nil {
+		group.Assignments = cmd.NewAssignment
+	}
+	group.GenerationID++
+	return OKResult()
+}
+
 func (fsm *MetadataFSM) applyLeaveConsumerGroup(cmd *LeaveConsumerGroupCmd) sm.Result {
+	// If the group was created via the T-049 design (GroupStates), use that path.
+	if fsm.state.GroupStates != nil {
+		if _, inGroupStates := fsm.state.GroupStates[cmd.GroupID]; inGroupStates {
+			return fsm.applyGroupStateLeave(cmd)
+		}
+	}
+
 	group, exists := fsm.state.Groups[cmd.GroupID]
 	if !exists {
 		return ErrorResult(ResultErrNotFound, "group not found")
@@ -225,6 +262,33 @@ func (fsm *MetadataFSM) applyLeaveConsumerGroup(cmd *LeaveConsumerGroupCmd) sm.R
 	delete(group.Members, cmd.MemberID)
 	rebalance(group, fsm.state.Topics, fsm.state.Partitions)
 	group.GenerationID++
+	return OKResult()
+}
+
+// applyGroupStateLeave handles LeaveConsumerGroupCmd when the coordinator has
+// pre-computed the new assignment. Empty groups are deleted from GroupStates.
+func (fsm *MetadataFSM) applyGroupStateLeave(cmd *LeaveConsumerGroupCmd) sm.Result {
+	if fsm.state.GroupStates == nil {
+		return ErrorResult(ResultErrNotFound, "group not found")
+	}
+	group, exists := fsm.state.GroupStates[cmd.GroupID]
+	if !exists {
+		return ErrorResult(ResultErrNotFound, "group not found")
+	}
+	if _, exists := group.Members[cmd.MemberID]; !exists {
+		return ErrorResult(ResultErrNotFound, "member not found")
+	}
+	delete(group.Members, cmd.MemberID)
+	if cmd.NewAssignment != nil {
+		group.Assignments = cmd.NewAssignment
+	} else {
+		// Empty map after JSON round-trip of omitempty field; clear assignments.
+		group.Assignments = make(map[string][]TopicPartition)
+	}
+	group.GenerationID++
+	if len(group.Members) == 0 {
+		delete(fsm.state.GroupStates, cmd.GroupID)
+	}
 	return OKResult()
 }
 
@@ -245,12 +309,34 @@ func (fsm *MetadataFSM) applyHeartbeatConsumerGroup(cmd *HeartbeatConsumerGroupC
 }
 
 func (fsm *MetadataFSM) applyCommitConsumerOffset(cmd *CommitConsumerOffsetCmd) sm.Result {
+	if cmd.GroupOffsets != nil {
+		return fsm.applyGroupStateCommitOffset(cmd)
+	}
+
 	group, exists := fsm.state.Groups[cmd.GroupID]
 	if !exists {
 		return ErrorResult(ResultErrNotFound, "group not found")
 	}
 	for _, o := range cmd.Offsets {
 		group.CommittedOffsets[PartitionKey{Topic: o.Topic, PartitionID: o.PartitionID}] = o.Offset
+	}
+	return OKResult()
+}
+
+// applyGroupStateCommitOffset merges GroupOffsets into GroupState.Offsets.
+func (fsm *MetadataFSM) applyGroupStateCommitOffset(cmd *CommitConsumerOffsetCmd) sm.Result {
+	if fsm.state.GroupStates == nil {
+		return ErrorResult(ResultErrNotFound, "group not found")
+	}
+	group, exists := fsm.state.GroupStates[cmd.GroupID]
+	if !exists {
+		return ErrorResult(ResultErrNotFound, "group not found")
+	}
+	if group.Offsets == nil {
+		group.Offsets = make(map[TopicPartition]int64)
+	}
+	for tp, offset := range cmd.GroupOffsets {
+		group.Offsets[tp] = offset
 	}
 	return OKResult()
 }
@@ -405,8 +491,49 @@ func (fsm *MetadataFSM) Lookup(q interface{}) (interface{}, error) {
 		return g.CommittedOffsets[query.PartKey], nil
 
 	default:
+		return fsm.lookupGroupState(query)
+	}
+}
+
+func (fsm *MetadataFSM) lookupGroupState(query MetadataQuery) (interface{}, error) {
+	switch query.Type {
+	case QueryGetGroupState:
+		if fsm.state.GroupStates == nil {
+			return nil, nil
+		}
+		g, exists := fsm.state.GroupStates[query.GroupID]
+		if !exists {
+			return nil, nil
+		}
+		c := *g
+		return &c, nil
+
+	case QueryGetGroupOffsets:
+		return fsm.lookupGroupOffsets(query.GroupID, query.Partitions), nil
+
+	default:
 		return nil, fmt.Errorf("unknown query type: %q", query.Type)
 	}
+}
+
+func (fsm *MetadataFSM) lookupGroupOffsets(groupID string, partitions []TopicPartition) map[TopicPartition]int64 {
+	result := make(map[TopicPartition]int64, len(partitions))
+	for _, tp := range partitions {
+		result[tp] = -1
+	}
+	if fsm.state.GroupStates == nil {
+		return result
+	}
+	g, exists := fsm.state.GroupStates[groupID]
+	if !exists {
+		return result
+	}
+	for _, tp := range partitions {
+		if offset, ok := g.Offsets[tp]; ok {
+			result[tp] = offset
+		}
+	}
+	return result
 }
 
 func (fsm *MetadataFSM) SaveSnapshot(w io.Writer, _ sm.ISnapshotFileCollection, done <-chan struct{}) error {
@@ -427,6 +554,9 @@ func (fsm *MetadataFSM) RecoverFromSnapshot(r io.Reader, _ []sm.SnapshotFile, do
 	s := &MetadataState{}
 	if err := json.NewDecoder(r).Decode(s); err != nil {
 		return err
+	}
+	if s.GroupStates == nil {
+		s.GroupStates = make(map[string]*GroupState)
 	}
 	fsm.state = s
 	return nil

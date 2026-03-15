@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -16,7 +17,56 @@ type MetadataState struct {
 	Partitions  map[PartitionKey]*PartitionMeta
 	Nodes       map[uint64]*NodeInfo
 	Groups      map[string]*ConsumerGroupMeta
+	GroupStates map[string]*GroupState
 	NextShardID uint64
+}
+
+// TopicPartition identifies a partition within a topic. Used as a map key in
+// GroupState; implements TextMarshaler/TextUnmarshaler for JSON map key encoding.
+type TopicPartition struct {
+	Topic       string `json:"topic"`
+	PartitionID int32  `json:"partition_id"`
+}
+
+func (tp TopicPartition) MarshalText() ([]byte, error) {
+	return []byte(fmt.Sprintf("%s\x00%d", tp.Topic, tp.PartitionID)), nil
+}
+
+func (tp *TopicPartition) UnmarshalText(data []byte) error {
+	s := string(data)
+	idx := strings.LastIndex(s, "\x00")
+	if idx < 0 {
+		return fmt.Errorf("invalid TopicPartition text: %q", s)
+	}
+	n, err := strconv.ParseInt(s[idx+1:], 10, 32)
+	if err != nil {
+		return fmt.Errorf("invalid TopicPartition partition_id: %w", err)
+	}
+	tp.Topic = s[:idx]
+	tp.PartitionID = int32(n)
+	return nil
+}
+
+// MemberState holds the per-member data stored in the Metadata FSM.
+// The coordinator pre-computes assignments and sends them in the command payload;
+// the FSM stores them without modification.
+type MemberState struct {
+	MemberID            string    `json:"member_id"`
+	SubscribedTopics    []string  `json:"subscribed_topics"`
+	SessionTimeoutMs    int32     `json:"session_timeout_ms"`
+	HeartbeatIntervalMs int32     `json:"heartbeat_interval_ms"`
+	JoinedAt            time.Time `json:"joined_at"`
+}
+
+// GroupState is the replicated group record stored in the Metadata FSM.
+// Assignments are pre-computed by the coordinator and stored here; the FSM
+// never runs the assignment algorithm itself.
+type GroupState struct {
+	GroupID      string                      `json:"group_id"`
+	Members      map[string]MemberState      `json:"members"`
+	GenerationID int32                       `json:"generation_id"`
+	Assignments  map[string][]TopicPartition `json:"assignments"`
+	Offsets      map[TopicPartition]int64    `json:"offsets"`
 }
 
 type PartitionKey struct {
@@ -162,11 +212,19 @@ type JoinConsumerGroupCmd struct {
 	ClientHost       string   `json:"client_host"`
 	SubscribedTopics []string `json:"subscribed_topics"`
 	JoinedAtMs       int64    `json:"joined_at_ms"`
+	// T-049: coordinator pre-computes assignment and sends it in the command.
+	// When Member is non-nil, the FSM stores the group in GroupStates.
+	Member        *MemberState                `json:"member,omitempty"`
+	NewAssignment map[string][]TopicPartition `json:"new_assignment,omitempty"`
 }
 
 type LeaveConsumerGroupCmd struct {
 	GroupID  string `json:"group_id"`
 	MemberID string `json:"member_id"`
+	// T-049 fields: coordinator supplies reason and the new assignment
+	// computed after removing this member.
+	Reason        string                      `json:"reason,omitempty"`
+	NewAssignment map[string][]TopicPartition `json:"new_assignment,omitempty"`
 }
 
 type HeartbeatConsumerGroupCmd struct {
@@ -185,6 +243,9 @@ type CommittedOffset struct {
 type CommitConsumerOffsetCmd struct {
 	GroupID string            `json:"group_id"`
 	Offsets []CommittedOffset `json:"offsets"`
+	// T-049: map-form offsets used with GroupStates. When GroupOffsets is
+	// non-nil, the FSM merges it into GroupState.Offsets.
+	GroupOffsets map[TopicPartition]int64 `json:"group_offsets,omitempty"`
 }
 
 type RebalanceConsumerGroupCmd struct {
@@ -206,6 +267,11 @@ const (
 	QueryListNodes          QueryType = "list_nodes"
 	QueryGetGroup           QueryType = "get_group"
 	QueryGetCommittedOffset QueryType = "get_committed_offset"
+	// QueryGetGroupState returns *GroupState (nil if not found) from GroupStates.
+	QueryGetGroupState  QueryType = "get_group_state"
+	// QueryGetGroupOffsets returns map[TopicPartition]int64 for the requested
+	// partitions; missing entries return -1.
+	QueryGetGroupOffsets QueryType = "get_group_offsets"
 )
 
 type MetadataQuery struct {
@@ -215,4 +281,5 @@ type MetadataQuery struct {
 	NodeID      uint64
 	GroupID     string
 	PartKey     PartitionKey
+	Partitions  []TopicPartition
 }
