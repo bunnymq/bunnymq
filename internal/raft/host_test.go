@@ -11,6 +11,9 @@ import (
 	"github.com/lni/dragonboat/v4/client"
 	dbconfig "github.com/lni/dragonboat/v4/config"
 	sm "github.com/lni/dragonboat/v4/statemachine"
+
+	"github.com/bunnymq/bunnymq/internal/metadata"
+	"github.com/bunnymq/bunnymq/internal/partition"
 )
 
 // --- fake nodeHostIface for serialization tests ---
@@ -62,7 +65,7 @@ func TestHost_MetadataPropose_Serialize(t *testing.T) {
 	fake := &fakeNodeHost{}
 	h := fakeHost(fake)
 
-	cmd := MetadataCommand{Type: CmdCreateTopic}
+	cmd := metadata.MetadataCommand{Type: metadata.CmdCreateTopic}
 	_, err := h.SyncProposeMetadata(context.Background(), cmd)
 	if err != nil {
 		t.Fatalf("SyncProposeMetadata: %v", err)
@@ -85,7 +88,7 @@ func TestHost_PartitionPropose_Serialize(t *testing.T) {
 	fake := &fakeNodeHost{}
 	h := fakeHost(fake)
 
-	cmd := PartitionCommand{Type: CmdPartitionAppendBatch, Payload: []byte("data")}
+	cmd := partition.PartitionCommand{Type: partition.CmdAppendBatch, Payload: []byte("data")}
 	_, err := h.SyncProposePartition(context.Background(), 1, cmd)
 	if err != nil {
 		t.Fatalf("SyncProposePartition: %v", err)

@@ -9,10 +9,13 @@ import (
 	"github.com/lni/dragonboat/v4/client"
 	dbconfig "github.com/lni/dragonboat/v4/config"
 	sm "github.com/lni/dragonboat/v4/statemachine"
+
+	"github.com/bunnymq/bunnymq/internal/metadata"
+	"github.com/bunnymq/bunnymq/internal/partition"
 )
 
 const (
-	metadataShardID     = uint64(0)
+	metadataShardID      = uint64(0)
 	defaultProposeTimeout = 5 * time.Second
 )
 
@@ -85,7 +88,7 @@ func (h *Host) Close() error {
 }
 
 // SyncProposeMetadata proposes a metadata command and blocks until quorum commit.
-func (h *Host) SyncProposeMetadata(ctx context.Context, cmd MetadataCommand) (sm.Result, error) {
+func (h *Host) SyncProposeMetadata(ctx context.Context, cmd metadata.MetadataCommand) (sm.Result, error) {
 	data, err := json.Marshal(cmd)
 	if err != nil {
 		return sm.Result{}, err
@@ -95,7 +98,7 @@ func (h *Host) SyncProposeMetadata(ctx context.Context, cmd MetadataCommand) (sm
 }
 
 // ProposeMetadata proposes a metadata command with acks=0 (fire and forget).
-func (h *Host) ProposeMetadata(ctx context.Context, cmd MetadataCommand) error {
+func (h *Host) ProposeMetadata(ctx context.Context, cmd metadata.MetadataCommand) error {
 	data, err := json.Marshal(cmd)
 	if err != nil {
 		return err
@@ -115,20 +118,20 @@ func (h *Host) ProposeMetadata(ctx context.Context, cmd MetadataCommand) error {
 }
 
 // LookupMetadata queries the local Metadata FSM without a Raft round-trip.
-func (h *Host) LookupMetadata(ctx context.Context, q MetadataQuery) (interface{}, error) {
+func (h *Host) LookupMetadata(ctx context.Context, q metadata.MetadataQuery) (interface{}, error) {
 	return h.nh.StaleRead(metadataShardID, q)
 }
 
 // SyncProposePartition proposes a partition command and blocks until quorum commit.
-func (h *Host) SyncProposePartition(ctx context.Context, shardID uint64, cmd PartitionCommand) (sm.Result, error) {
+func (h *Host) SyncProposePartition(ctx context.Context, shardID uint64, cmd partition.PartitionCommand) (sm.Result, error) {
 	session := h.nh.GetNoOPSession(shardID)
-	return h.nh.SyncPropose(ctx, session, encodePartitionCommand(cmd))
+	return h.nh.SyncPropose(ctx, session, cmd.Marshal())
 }
 
 // ProposePartition proposes a partition command with acks=0 (fire and forget).
-func (h *Host) ProposePartition(ctx context.Context, shardID uint64, cmd PartitionCommand) error {
+func (h *Host) ProposePartition(ctx context.Context, shardID uint64, cmd partition.PartitionCommand) error {
 	session := h.nh.GetNoOPSession(shardID)
-	rs, err := h.nh.Propose(session, encodePartitionCommand(cmd), proposeTimeout(ctx))
+	rs, err := h.nh.Propose(session, cmd.Marshal(), proposeTimeout(ctx))
 	if err != nil {
 		return err
 	}
@@ -142,7 +145,7 @@ func (h *Host) ProposePartition(ctx context.Context, shardID uint64, cmd Partiti
 }
 
 // LookupPartition queries the local Partition FSM without a Raft round-trip.
-func (h *Host) LookupPartition(ctx context.Context, shardID uint64, q PartitionQuery) (interface{}, error) {
+func (h *Host) LookupPartition(ctx context.Context, shardID uint64, q partition.PartitionQuery) (interface{}, error) {
 	return h.nh.StaleRead(shardID, q)
 }
 
@@ -158,14 +161,6 @@ func (h *Host) shardConfig(shardID uint64) dbconfig.Config {
 		SnapshotEntries:    1 << 62,
 		CompactionOverhead: 1 << 62,
 	}
-}
-
-// encodePartitionCommand serialises a PartitionCommand as [type_byte, payload...].
-func encodePartitionCommand(cmd PartitionCommand) []byte {
-	data := make([]byte, 1+len(cmd.Payload))
-	data[0] = cmd.Type
-	copy(data[1:], cmd.Payload)
-	return data
 }
 
 // proposeTimeout returns the remaining context deadline, or defaultProposeTimeout
