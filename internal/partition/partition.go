@@ -131,6 +131,8 @@ func (fsm *PartitionFSM) Lookup(query any) (any, error) {
 		return fsm.storage.EarliestOffset(), nil
 	case QueryLatestOffset:
 		return fsm.storage.LatestOffset(), nil
+	case QueryGetNewDataCh:
+		return fsm.storage.NewDataCh(), nil
 	default:
 		return nil, fmt.Errorf("partition: unknown query type %q", q.Type)
 	}
