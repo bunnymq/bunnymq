@@ -1,6 +1,8 @@
 package data
 
-import "errors"
+import coorddata "github.com/bunnymq/bunnymq/internal/coordinator/data"
 
-var ErrOffsetNotFound = errors.New("offset not found")
-var ErrOffsetOutOfRange = errors.New("offset out of range")
+// Re-export coordinator sentinel errors so mapDataError and test stubs share a
+// single error identity across the api/data and coordinator/data packages.
+var ErrOffsetNotFound = coorddata.ErrOffsetNotFound
+var ErrOffsetOutOfRange = coorddata.ErrOffsetOutOfRange
