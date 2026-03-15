@@ -1,0 +1,54 @@
+package api
+
+import (
+	"crypto/tls"
+
+	apidata "github.com/bunnymq/bunnymq/internal/api/data"
+	"github.com/bunnymq/bunnymq/internal/api/auth"
+	"github.com/bunnymq/bunnymq/internal/api/logging"
+	apimgmt "github.com/bunnymq/bunnymq/internal/api/management"
+	"github.com/bunnymq/bunnymq/internal/coordinator/cluster"
+	"github.com/bunnymq/bunnymq/internal/coordinator/data"
+	proto "github.com/bunnymq/bunnymq/pkg/proto/v1"
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+)
+
+// ServerConfig holds shared configuration for both gRPC servers.
+type ServerConfig struct {
+	Addr       string
+	AuthTokens []string
+	TLSConfig  *tls.Config
+}
+
+// NewManagementServer builds a grpc.Server for the Management API.
+func NewManagementServer(config ServerConfig, cc *cluster.ClusterCoordinator, logger *zap.Logger) *grpc.Server {
+	srv := grpc.NewServer(serverOptions(config, logger)...)
+	proto.RegisterManagementServiceServer(srv, apimgmt.New(cc))
+	return srv
+}
+
+// NewDataServer builds a grpc.Server for the Data API.
+func NewDataServer(config ServerConfig, dc *data.DataCoordinator, logger *zap.Logger) *grpc.Server {
+	srv := grpc.NewServer(serverOptions(config, logger)...)
+	proto.RegisterDataServiceServer(srv, apidata.New(dc))
+	return srv
+}
+
+func serverOptions(config ServerConfig, logger *zap.Logger) []grpc.ServerOption {
+	opts := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(
+			auth.UnaryInterceptor(config.AuthTokens, logger),
+			logging.UnaryInterceptor(logger),
+		),
+		grpc.ChainStreamInterceptor(
+			auth.StreamInterceptor(config.AuthTokens, logger),
+			logging.StreamInterceptor(logger),
+		),
+	}
+	if config.TLSConfig != nil {
+		opts = append(opts, grpc.Creds(credentials.NewTLS(config.TLSConfig)))
+	}
+	return opts
+}
