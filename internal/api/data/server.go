@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const defaultFetchMaxBytes = 1 * 1024 * 1024 // 1 MiB
+
 // Server implements pb.DataServiceServer by delegating to DataCoordinatorIface.
 type Server struct {
 	pb.UnimplementedDataServiceServer
@@ -34,6 +36,27 @@ func (s *Server) Produce(ctx context.Context, req *pb.ProduceRequest) (*pb.Produ
 		return nil, mapDataError(err)
 	}
 	return &pb.ProduceResponse{PartitionId: req.PartitionId, Offset: offset}, nil
+}
+
+func (s *Server) Fetch(ctx context.Context, req *pb.FetchRequest) (*pb.FetchResponse, error) {
+	if req.Offset < 0 {
+		return nil, status.Error(codes.InvalidArgument, "offset must be >= 0")
+	}
+	maxBytes := int(req.MaxBytes)
+	if maxBytes <= 0 {
+		maxBytes = defaultFetchMaxBytes
+	}
+	records, nextOffset, err := s.dc.Fetch(ctx, req.Topic, req.PartitionId, req.Offset, maxBytes, req.MaxWaitMs)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		return nil, mapDataError(err)
+	}
+	if records == nil {
+		return &pb.FetchResponse{Records: nil, NextOffset: req.Offset}, nil
+	}
+	return &pb.FetchResponse{Records: records, NextOffset: nextOffset}, nil
 }
 
 func (s *Server) GetOffsets(ctx context.Context, req *pb.GetOffsetsRequest) (*pb.GetOffsetsResponse, error) {
@@ -87,6 +110,11 @@ func mapDataError(err error) error {
 				&pb.BunnyErrorDetail{Code: pb.BunnyErrorCode_NOT_LEADER, Message: err.Error()},
 				&pb.NotLeaderDetail{LeaderNodeId: notLeader.LeaderNodeID, LeaderAddress: notLeader.LeaderAddress},
 			)
+		return st.Err()
+	}
+	if errors.Is(err, ErrOffsetOutOfRange) {
+		st, _ := status.New(codes.OutOfRange, err.Error()).
+			WithDetails(&pb.BunnyErrorDetail{Code: pb.BunnyErrorCode_OFFSET_OUT_OF_RANGE, Message: err.Error()})
 		return st.Err()
 	}
 	if errors.Is(err, ErrOffsetNotFound) {

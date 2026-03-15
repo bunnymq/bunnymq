@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"testing"
+	"time"
 
 	coorddata "github.com/bunnymq/bunnymq/internal/coordinator/data"
 	"github.com/bunnymq/bunnymq/internal/storage"
@@ -16,6 +17,7 @@ import (
 // stubDataCoordinator is a minimal DataCoordinatorIface for unit tests.
 type stubDataCoordinator struct {
 	produceFn              func(ctx context.Context, topic string, partitionID int32, batch []byte, acks coorddata.AcksMode) (int64, error)
+	fetchFn                func(ctx context.Context, topic string, partitionID int32, offset int64, maxBytes int, maxWaitMs int64) ([]byte, int64, error)
 	getEarliestOffsetFn    func(ctx context.Context, topic string, partitionID int32) (int64, error)
 	getLatestOffsetFn      func(ctx context.Context, topic string, partitionID int32) (int64, error)
 	getOffsetByTimestampFn func(ctx context.Context, topic string, partitionID int32, timestampMs int64) (int64, error)
@@ -23,6 +25,10 @@ type stubDataCoordinator struct {
 
 func (s *stubDataCoordinator) Produce(ctx context.Context, topic string, partitionID int32, batch []byte, acks coorddata.AcksMode) (int64, error) {
 	return s.produceFn(ctx, topic, partitionID, batch, acks)
+}
+
+func (s *stubDataCoordinator) Fetch(ctx context.Context, topic string, partitionID int32, offset int64, maxBytes int, maxWaitMs int64) ([]byte, int64, error) {
+	return s.fetchFn(ctx, topic, partitionID, offset, maxBytes, maxWaitMs)
 }
 
 func (s *stubDataCoordinator) GetEarliestOffset(ctx context.Context, topic string, partitionID int32) (int64, error) {
@@ -211,6 +217,178 @@ func TestValidateBatch_BadBatchLength(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	assertBunnyCode(t, err, codes.InvalidArgument, pb.BunnyErrorCode_INVALID_MESSAGE_FORMAT)
+}
+
+func TestDataServer_Fetch_ImmediateData(t *testing.T) {
+	records := validBatch(t)
+	srv := New(&stubDataCoordinator{
+		fetchFn: func(_ context.Context, _ string, _ int32, _ int64, _ int, _ int64) ([]byte, int64, error) {
+			return records, 10, nil
+		},
+	})
+
+	resp, err := srv.Fetch(context.Background(), &pb.FetchRequest{
+		Topic:       "test-topic",
+		PartitionId: 0,
+		Offset:      5,
+		MaxBytes:    1024,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Records) == 0 {
+		t.Error("expected non-empty records")
+	}
+	if resp.NextOffset != 10 {
+		t.Errorf("next_offset: got %d, want 10", resp.NextOffset)
+	}
+}
+
+func TestDataServer_Fetch_EmptyNoWait(t *testing.T) {
+	srv := New(&stubDataCoordinator{
+		fetchFn: func(_ context.Context, _ string, _ int32, offset int64, _ int, maxWaitMs int64) ([]byte, int64, error) {
+			return nil, offset, nil
+		},
+	})
+
+	resp, err := srv.Fetch(context.Background(), &pb.FetchRequest{
+		Topic:       "test-topic",
+		PartitionId: 0,
+		Offset:      7,
+		MaxWaitMs:   0,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Records != nil {
+		t.Error("expected nil records on empty no-wait response")
+	}
+	if resp.NextOffset != 7 {
+		t.Errorf("next_offset: got %d, want 7 (unchanged)", resp.NextOffset)
+	}
+}
+
+func TestDataServer_Fetch_LongPollReturnsData(t *testing.T) {
+	records := validBatch(t)
+	srv := New(&stubDataCoordinator{
+		fetchFn: func(ctx context.Context, _ string, _ int32, _ int64, _ int, _ int64) ([]byte, int64, error) {
+			select {
+			case <-time.After(10 * time.Millisecond):
+				return records, 20, nil
+			case <-ctx.Done():
+				return nil, 0, ctx.Err()
+			}
+		},
+	})
+
+	resp, err := srv.Fetch(context.Background(), &pb.FetchRequest{
+		Topic:       "test-topic",
+		PartitionId: 0,
+		Offset:      15,
+		MaxWaitMs:   200,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Records) == 0 {
+		t.Error("expected non-empty records after long-poll")
+	}
+	if resp.NextOffset != 20 {
+		t.Errorf("next_offset: got %d, want 20", resp.NextOffset)
+	}
+}
+
+func TestDataServer_Fetch_OffsetOutOfRange(t *testing.T) {
+	srv := New(&stubDataCoordinator{
+		fetchFn: func(_ context.Context, _ string, _ int32, _ int64, _ int, _ int64) ([]byte, int64, error) {
+			return nil, 0, ErrOffsetOutOfRange
+		},
+	})
+
+	_, err := srv.Fetch(context.Background(), &pb.FetchRequest{
+		Topic:       "test-topic",
+		PartitionId: 0,
+		Offset:      999,
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	assertBunnyCode(t, err, codes.OutOfRange, pb.BunnyErrorCode_OFFSET_OUT_OF_RANGE)
+}
+
+func TestDataServer_Fetch_NotLeader(t *testing.T) {
+	srv := New(&stubDataCoordinator{
+		fetchFn: func(_ context.Context, _ string, _ int32, _ int64, _ int, _ int64) ([]byte, int64, error) {
+			return nil, 0, &coorddata.NotLeaderError{LeaderNodeID: 3, LeaderAddress: "broker3:9092"}
+		},
+	})
+
+	_, err := srv.Fetch(context.Background(), &pb.FetchRequest{
+		Topic:       "test-topic",
+		PartitionId: 0,
+		Offset:      0,
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st := status.Convert(err)
+	if st.Code() != codes.FailedPrecondition {
+		t.Errorf("code: got %v, want %v", st.Code(), codes.FailedPrecondition)
+	}
+	var foundBunny, foundLeader bool
+	for _, d := range st.Details() {
+		switch detail := d.(type) {
+		case *pb.BunnyErrorDetail:
+			if detail.Code != pb.BunnyErrorCode_NOT_LEADER {
+				t.Errorf("BunnyErrorCode: got %v, want NOT_LEADER", detail.Code)
+			}
+			foundBunny = true
+		case *pb.NotLeaderDetail:
+			if detail.LeaderNodeId != 3 {
+				t.Errorf("leader_node_id: got %d, want 3", detail.LeaderNodeId)
+			}
+			if detail.LeaderAddress != "broker3:9092" {
+				t.Errorf("leader_address: got %q, want %q", detail.LeaderAddress, "broker3:9092")
+			}
+			foundLeader = true
+		}
+	}
+	if !foundBunny {
+		t.Error("BunnyErrorDetail missing from status details")
+	}
+	if !foundLeader {
+		t.Error("NotLeaderDetail missing from status details")
+	}
+}
+
+func TestDataServer_Fetch_CtxCancelled(t *testing.T) {
+	srv := New(&stubDataCoordinator{
+		fetchFn: func(ctx context.Context, _ string, _ int32, _ int64, _ int, _ int64) ([]byte, int64, error) {
+			select {
+			case <-ctx.Done():
+				return nil, 0, ctx.Err()
+			case <-time.After(5 * time.Second):
+				return nil, 0, nil
+			}
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err := srv.Fetch(ctx, &pb.FetchRequest{
+		Topic:       "test-topic",
+		PartitionId: 0,
+		Offset:      0,
+		MaxWaitMs:   5000,
+	})
+	if err == nil {
+		t.Fatal("expected error on cancelled context, got nil")
+	}
+	st := status.Convert(err)
+	if st.Code() != codes.Canceled {
+		t.Errorf("code: got %v, want %v", st.Code(), codes.Canceled)
+	}
 }
 
 // assertBunnyCode verifies that err has the given gRPC status code and BunnyErrorCode.
