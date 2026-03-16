@@ -256,17 +256,30 @@ type commitOffsetResult struct {
 	err error
 }
 
+type heartbeatResult struct {
+	status pb.HeartbeatStatus
+	err    error
+}
+
+type leaveGroupCall struct {
+	groupID  string
+	memberID string
+}
+
 type fakeGroupDataSvc struct {
 	pb.UnimplementedDataServiceServer
-	mu               sync.Mutex
-	joinResults      []joinGroupResult
-	joinCalls        []*pb.JoinGroupRequest
-	commitResults    []commitOffsetResult
-	commitCalls      []*pb.CommitOffsetRequest
-	fetchOffsResults []fetchOffsetsResult
-	fetchOfsCalls    []*pb.FetchCommittedOffsetsRequest
-	getOffsetResult  int64
-	getOffsetCalls   int
+	mu                sync.Mutex
+	joinResults       []joinGroupResult
+	joinCalls         []*pb.JoinGroupRequest
+	commitResults     []commitOffsetResult
+	commitCalls       []*pb.CommitOffsetRequest
+	fetchOffsResults  []fetchOffsetsResult
+	fetchOfsCalls     []*pb.FetchCommittedOffsetsRequest
+	getOffsetResult   int64
+	getOffsetCalls    int
+	heartbeatResults  []heartbeatResult
+	heartbeatCalls    []*pb.HeartbeatRequest
+	leaveGroupCalls  []leaveGroupCall
 }
 
 func (f *fakeGroupDataSvc) JoinGroup(_ context.Context, req *pb.JoinGroupRequest) (*pb.JoinGroupResponse, error) {
@@ -310,6 +323,32 @@ func (f *fakeGroupDataSvc) GetOffsets(_ context.Context, _ *pb.GetOffsetsRequest
 	defer f.mu.Unlock()
 	f.getOffsetCalls++
 	return &pb.GetOffsetsResponse{Offset: f.getOffsetResult}, nil
+}
+
+func (f *fakeGroupDataSvc) Heartbeat(_ context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.heartbeatCalls = append(f.heartbeatCalls, req)
+	if len(f.heartbeatResults) == 0 {
+		return &pb.HeartbeatResponse{Status: pb.HeartbeatStatus_HEARTBEAT_OK}, nil
+	}
+	r := f.heartbeatResults[0]
+	f.heartbeatResults = f.heartbeatResults[1:]
+	if r.err != nil {
+		return nil, r.err
+	}
+	return &pb.HeartbeatResponse{Status: r.status}, nil
+}
+
+func (f *fakeGroupDataSvc) LeaveGroup(_ context.Context, req *pb.LeaveGroupRequest) (*pb.LeaveGroupResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.leaveGroupCalls = append(f.leaveGroupCalls, leaveGroupCall{req.GroupId, req.MemberId})
+	return &pb.LeaveGroupResponse{}, nil
+}
+
+func (f *fakeGroupDataSvc) Fetch(_ context.Context, _ *pb.FetchRequest) (*pb.FetchResponse, error) {
+	return &pb.FetchResponse{}, nil
 }
 
 func newGroupConsumerTestServer(t *testing.T) *groupConsumerTestServer {
@@ -377,6 +416,42 @@ func staleGenerationErr() error {
 		&pb.BunnyErrorDetail{Code: pb.BunnyErrorCode_STALE_GENERATION},
 	)
 	return st.Err()
+}
+
+func notGroupMemberErr() error {
+	st, _ := status.New(codes.FailedPrecondition, "not group member").WithDetails(
+		&pb.BunnyErrorDetail{Code: pb.BunnyErrorCode_NOT_GROUP_MEMBER},
+	)
+	return st.Err()
+}
+
+func notLeaderErrWithDetail(leaderAddr string) error {
+	st, _ := status.New(codes.FailedPrecondition, "not leader").WithDetails(
+		&pb.BunnyErrorDetail{Code: pb.BunnyErrorCode_NOT_LEADER},
+		&pb.NotLeaderDetail{LeaderAddress: leaderAddr},
+	)
+	return st.Err()
+}
+
+// newGroupConsumerWithHB creates a group Consumer with a fast heartbeat interval.
+func newGroupConsumerWithHB(t *testing.T, bootstrapAddr, groupID string, heartbeatMs int64) *Consumer {
+	t.Helper()
+	c, err := NewConsumer(ConsumerConfig{
+		Config: Config{
+			BootstrapServers: []string{bootstrapAddr},
+			RequestTimeout:   2 * time.Second,
+		},
+		GroupID:             groupID,
+		MaxFetchBytes:       1 << 20,
+		MaxFetchWaitMs:      100,
+		AutoOffsetReset:     OffsetResetEarliest,
+		HeartbeatIntervalMs: heartbeatMs,
+	})
+	if err != nil {
+		t.Fatalf("NewConsumer: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
 }
 
 // ---- group mode consumer tests ----
@@ -717,3 +792,290 @@ func TestConsumer_Poll_MultiPartition(t *testing.T) {
 	}
 }
 
+// ---- heartbeat / rebalance tests ----
+
+func TestConsumer_Heartbeat_SentPeriodically(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+	setGroupCoordMeta(ts)
+
+	ts.dataSvc.mu.Lock()
+	ts.dataSvc.joinResults = []joinGroupResult{{
+		resp: &pb.JoinGroupResponse{
+			MemberId:     "m1",
+			GenerationId: 1,
+			Assignments:  []*pb.TopicPartition{{Topic: "t", PartitionId: 0}},
+		},
+	}}
+	ts.dataSvc.mu.Unlock()
+
+	const intervalMs = 50
+	c := newGroupConsumerWithHB(t, ts.addr, "grp1", intervalMs)
+	if err := c.Subscribe([]string{"t"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// Wait for at least 3 heartbeats: 3 × intervalMs + margin.
+	time.Sleep(time.Duration(3*intervalMs+intervalMs/2) * time.Millisecond)
+
+	ts.dataSvc.mu.Lock()
+	n := len(ts.dataSvc.heartbeatCalls)
+	ts.dataSvc.mu.Unlock()
+
+	if n < 3 {
+		t.Errorf("heartbeat calls = %d, want >= 3", n)
+	}
+}
+
+func TestConsumer_Heartbeat_RebalanceRequired_TriggersRejoin(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+	setGroupCoordMeta(ts)
+
+	ts.dataSvc.mu.Lock()
+	ts.dataSvc.joinResults = []joinGroupResult{
+		{resp: &pb.JoinGroupResponse{MemberId: "m1", GenerationId: 1, Assignments: []*pb.TopicPartition{{Topic: "t", PartitionId: 0}}}},
+		{resp: &pb.JoinGroupResponse{MemberId: "m1", GenerationId: 2, Assignments: []*pb.TopicPartition{{Topic: "t", PartitionId: 0}}}},
+	}
+	ts.dataSvc.heartbeatResults = []heartbeatResult{
+		{status: pb.HeartbeatStatus_HEARTBEAT_REBALANCE_REQUIRED},
+	}
+	ts.dataSvc.mu.Unlock()
+
+	const intervalMs = 50
+	c := newGroupConsumerWithHB(t, ts.addr, "grp1", intervalMs)
+	if err := c.Subscribe([]string{"t"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// Wait for the first heartbeat to fire and rebalance to complete.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		gen := c.generationID
+		c.mu.Unlock()
+		if gen == 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	c.mu.Lock()
+	gen := c.generationID
+	c.mu.Unlock()
+	if gen != 2 {
+		t.Errorf("generationID = %d, want 2 after rebalance", gen)
+	}
+
+	ts.dataSvc.mu.Lock()
+	joins := len(ts.dataSvc.joinCalls)
+	ts.dataSvc.mu.Unlock()
+	if joins < 2 {
+		t.Errorf("JoinGroup calls = %d, want >= 2 (initial + rejoin)", joins)
+	}
+}
+
+func TestConsumer_Heartbeat_NotLeader_RefreshesCoord(t *testing.T) {
+	// serverA: coordinator for initial subscribe.
+	serverA := newGroupConsumerTestServer(t)
+	serverA.mgmtSvc.mu.Lock()
+	serverA.mgmtSvc.clusterResp = &pb.DescribeClusterResponse{
+		Nodes: []*pb.NodeInfo{{NodeId: 1, Address: serverA.addr}},
+	}
+	serverA.mgmtSvc.mu.Unlock()
+
+	// serverB: the new coordinator after NOT_LEADER.
+	serverB := newGroupConsumerTestServer(t)
+	serverB.mgmtSvc.mu.Lock()
+	serverB.mgmtSvc.clusterResp = &pb.DescribeClusterResponse{
+		Nodes: []*pb.NodeInfo{{NodeId: 2, Address: serverB.addr}},
+	}
+	serverB.mgmtSvc.mu.Unlock()
+
+	serverA.dataSvc.mu.Lock()
+	serverA.dataSvc.joinResults = []joinGroupResult{{
+		resp: &pb.JoinGroupResponse{MemberId: "m1", GenerationId: 1, Assignments: []*pb.TopicPartition{{Topic: "t", PartitionId: 0}}},
+	}}
+	// First heartbeat on serverA returns NOT_LEADER pointing at serverB.
+	serverA.dataSvc.heartbeatResults = []heartbeatResult{
+		{err: notLeaderErrWithDetail(serverB.addr)},
+	}
+	serverA.dataSvc.mu.Unlock()
+
+	const intervalMs = 50
+	c := newGroupConsumerWithHB(t, serverA.addr, "grp1", intervalMs)
+	if err := c.Subscribe([]string{"t"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// Wait for first heartbeat + NOT_LEADER handling + second heartbeat.
+	time.Sleep(time.Duration(3*intervalMs) * time.Millisecond)
+
+	// coordAddr must now be serverB.
+	c.mu.Lock()
+	addr := c.coordAddr
+	c.mu.Unlock()
+	if addr != serverB.addr {
+		t.Errorf("coordAddr = %q after NOT_LEADER, want %q", addr, serverB.addr)
+	}
+
+	// serverB should have received at least one heartbeat.
+	serverB.dataSvc.mu.Lock()
+	hbB := len(serverB.dataSvc.heartbeatCalls)
+	serverB.dataSvc.mu.Unlock()
+	if hbB < 1 {
+		t.Errorf("heartbeat calls on serverB = %d, want >= 1", hbB)
+	}
+}
+
+func TestConsumer_Heartbeat_NotGroupMember_Rebalance(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+	setGroupCoordMeta(ts)
+
+	ts.dataSvc.mu.Lock()
+	ts.dataSvc.joinResults = []joinGroupResult{
+		{resp: &pb.JoinGroupResponse{MemberId: "m1", GenerationId: 1, Assignments: []*pb.TopicPartition{{Topic: "t", PartitionId: 0}}}},
+		{resp: &pb.JoinGroupResponse{MemberId: "m1", GenerationId: 2, Assignments: []*pb.TopicPartition{{Topic: "t", PartitionId: 0}}}},
+	}
+	ts.dataSvc.heartbeatResults = []heartbeatResult{
+		{err: notGroupMemberErr()},
+	}
+	ts.dataSvc.mu.Unlock()
+
+	const intervalMs = 50
+	c := newGroupConsumerWithHB(t, ts.addr, "grp1", intervalMs)
+	if err := c.Subscribe([]string{"t"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		gen := c.generationID
+		c.mu.Unlock()
+		if gen == 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	c.mu.Lock()
+	gen := c.generationID
+	c.mu.Unlock()
+	if gen != 2 {
+		t.Errorf("generationID = %d, want 2 after NOT_GROUP_MEMBER rebalance", gen)
+	}
+}
+
+func TestConsumer_Close_StopsHeartbeat(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+	setGroupCoordMeta(ts)
+
+	ts.dataSvc.mu.Lock()
+	ts.dataSvc.joinResults = []joinGroupResult{{
+		resp: &pb.JoinGroupResponse{MemberId: "m1", GenerationId: 1, Assignments: []*pb.TopicPartition{{Topic: "t", PartitionId: 0}}},
+	}}
+	ts.dataSvc.mu.Unlock()
+
+	const intervalMs = 50
+	c := newGroupConsumerWithHB(t, ts.addr, "grp1", intervalMs)
+	if err := c.Subscribe([]string{"t"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// Let one heartbeat fire.
+	time.Sleep(time.Duration(intervalMs+intervalMs/2) * time.Millisecond)
+
+	// Close must complete well within 2× intervalMs after returning.
+	closeStart := time.Now()
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	_ = closeStart // close is synchronous; goroutine exits after ctx cancel
+
+	// No more heartbeats after Close + 2 intervals.
+	time.Sleep(time.Duration(2*intervalMs) * time.Millisecond)
+	ts.dataSvc.mu.Lock()
+	countAfterClose := len(ts.dataSvc.heartbeatCalls)
+	ts.dataSvc.mu.Unlock()
+
+	// Wait a bit more and confirm the count doesn't grow.
+	time.Sleep(time.Duration(2*intervalMs) * time.Millisecond)
+	ts.dataSvc.mu.Lock()
+	countLater := len(ts.dataSvc.heartbeatCalls)
+	ts.dataSvc.mu.Unlock()
+
+	if countLater != countAfterClose {
+		t.Errorf("heartbeat kept firing after Close: %d -> %d calls", countAfterClose, countLater)
+	}
+}
+
+func TestConsumer_Close_SendsLeaveGroup(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+	setGroupCoordMeta(ts)
+
+	ts.dataSvc.mu.Lock()
+	ts.dataSvc.joinResults = []joinGroupResult{{
+		resp: &pb.JoinGroupResponse{MemberId: "m1", GenerationId: 1, Assignments: []*pb.TopicPartition{{Topic: "t", PartitionId: 0}}},
+	}}
+	ts.dataSvc.mu.Unlock()
+
+	c := newGroupConsumerWithHB(t, ts.addr, "grp1", 10000)
+	if err := c.Subscribe([]string{"t"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	ts.dataSvc.mu.Lock()
+	calls := ts.dataSvc.leaveGroupCalls
+	ts.dataSvc.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("LeaveGroup calls = %d, want 1", len(calls))
+	}
+	if calls[0].groupID != "grp1" || calls[0].memberID != "m1" {
+		t.Errorf("LeaveGroup req = {%q, %q}, want {grp1, m1}", calls[0].groupID, calls[0].memberID)
+	}
+}
+
+func TestConsumer_Poll_WaitsForRebalance(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+	setGroupCoordMeta(ts)
+	setGroupTopicMeta(ts, "t")
+
+	ts.dataSvc.mu.Lock()
+	ts.dataSvc.joinResults = []joinGroupResult{
+		{resp: &pb.JoinGroupResponse{MemberId: "m1", GenerationId: 1, Assignments: []*pb.TopicPartition{{Topic: "t", PartitionId: 0}}}},
+		{resp: &pb.JoinGroupResponse{MemberId: "m1", GenerationId: 2, Assignments: []*pb.TopicPartition{{Topic: "t", PartitionId: 0}}}},
+	}
+	ts.dataSvc.heartbeatResults = []heartbeatResult{
+		{status: pb.HeartbeatStatus_HEARTBEAT_REBALANCE_REQUIRED},
+	}
+	ts.dataSvc.mu.Unlock()
+
+	const intervalMs = 50
+	c := newGroupConsumerWithHB(t, ts.addr, "grp1", intervalMs)
+	if err := c.Subscribe([]string{"t"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// Manually set the rebalancing flag to simulate a concurrent rebalance.
+	c.rebalancing.Store(true)
+
+	// Unblock Poll after a short delay by clearing the flag.
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		c.rebalancing.Store(false)
+	}()
+
+	pollStart := time.Now()
+	_, err := c.Poll(context.Background(), 500)
+	elapsed := time.Since(pollStart)
+
+	if err != nil {
+		t.Fatalf("Poll returned unexpected error: %v", err)
+	}
+	if elapsed < 50*time.Millisecond {
+		t.Errorf("Poll returned too quickly (%v), expected to wait for rebalance", elapsed)
+	}
+}
