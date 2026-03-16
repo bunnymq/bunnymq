@@ -1,0 +1,326 @@
+package group
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	sm "github.com/lni/dragonboat/v4/statemachine"
+
+	"github.com/bunnymq/bunnymq/internal/metadata"
+)
+
+var (
+	ErrNotGroupMember  = errors.New("not a group member")
+	ErrNotFound        = errors.New("not found")
+	ErrInvalidArgument = errors.New("invalid argument")
+)
+
+// GroupCoordinatorConfig holds configuration for a GroupCoordinator.
+type GroupCoordinatorConfig struct {
+	MetadataShardID     uint64
+	ThisNodeID          uint64
+	SessionTimeoutMinMs int32 // default 1000
+	SessionTimeoutMaxMs int32 // default 300000
+	SweepIntervalMs     int64 // default 5000
+}
+
+// nodeHostIface is the subset of raft.Host used by GroupCoordinator.
+type nodeHostIface interface {
+	SyncProposeMetadata(ctx context.Context, cmd metadata.MetadataCommand) (sm.Result, error)
+	LookupMetadata(ctx context.Context, q metadata.MetadataQuery) (interface{}, error)
+}
+
+// JoinGroupRequest holds the parameters for a JoinGroup call.
+type JoinGroupRequest struct {
+	GroupID             string
+	MemberID            string
+	Topics              []string
+	SessionTimeoutMs    int32
+	HeartbeatIntervalMs int32
+}
+
+// JoinGroupResponse holds the result of a successful JoinGroup.
+type JoinGroupResponse struct {
+	MemberID     string
+	GenerationID int32
+	Assignments  []metadata.TopicPartition
+}
+
+// LeaveGroupRequest holds the parameters for a LeaveGroup call.
+type LeaveGroupRequest struct {
+	GroupID  string
+	MemberID string
+}
+
+// GroupCoordinatorIface is the interface for test doubles in downstream packages.
+type GroupCoordinatorIface interface {
+	JoinGroup(ctx context.Context, req JoinGroupRequest) (JoinGroupResponse, error)
+	LeaveGroup(ctx context.Context, req LeaveGroupRequest) error
+	Heartbeat(ctx context.Context, groupID, memberID string, generationID int32) (rebalanceRequired bool, err error)
+	CommitOffset(ctx context.Context, groupID, memberID string, generationID int32, offsets map[metadata.TopicPartition]int64) error
+	FetchCommittedOffsets(ctx context.Context, groupID string, partitions []metadata.TopicPartition) (map[metadata.TopicPartition]int64, error)
+}
+
+// GroupCoordinator manages consumer group membership and partition assignment.
+// All writes are serialised by the metadata shard's Raft leader guarantee.
+type GroupCoordinator struct {
+	config        GroupCoordinatorConfig
+	nh            nodeHostIface
+	heartbeatMu   sync.RWMutex
+	lastHeartbeat map[string]map[string]time.Time // group → member → last heartbeat time
+}
+
+// NewGroupCoordinator creates a new GroupCoordinator.
+func NewGroupCoordinator(config GroupCoordinatorConfig, nh nodeHostIface) *GroupCoordinator {
+	if config.SessionTimeoutMinMs == 0 {
+		config.SessionTimeoutMinMs = 1000
+	}
+	if config.SessionTimeoutMaxMs == 0 {
+		config.SessionTimeoutMaxMs = 300000
+	}
+	if config.SweepIntervalMs == 0 {
+		config.SweepIntervalMs = 5000
+	}
+	return &GroupCoordinator{
+		config:        config,
+		nh:            nh,
+		lastHeartbeat: make(map[string]map[string]time.Time),
+	}
+}
+
+// JoinGroup adds a member to the consumer group and returns the member's partition assignment.
+func (gc *GroupCoordinator) JoinGroup(ctx context.Context, req JoinGroupRequest) (JoinGroupResponse, error) {
+	if req.SessionTimeoutMs < gc.config.SessionTimeoutMinMs || req.SessionTimeoutMs > gc.config.SessionTimeoutMaxMs {
+		return JoinGroupResponse{}, fmt.Errorf("%w: session_timeout_ms %d out of range [%d, %d]",
+			ErrInvalidArgument, req.SessionTimeoutMs, gc.config.SessionTimeoutMinMs, gc.config.SessionTimeoutMaxMs)
+	}
+
+	partitionCounts := make(map[string]int32, len(req.Topics))
+	for _, topic := range req.Topics {
+		raw, err := gc.nh.LookupMetadata(ctx, metadata.MetadataQuery{
+			Type:      metadata.QueryGetTopic,
+			TopicName: topic,
+		})
+		if err != nil {
+			if errors.Is(err, metadata.ErrNotFound) {
+				return JoinGroupResponse{}, fmt.Errorf("%w: topic %q", ErrNotFound, topic)
+			}
+			return JoinGroupResponse{}, fmt.Errorf("lookup topic %q: %w", topic, err)
+		}
+		tm := raw.(*metadata.TopicMeta)
+		partitionCounts[topic] = tm.PartitionCount
+	}
+
+	groupRaw, err := gc.nh.LookupMetadata(ctx, metadata.MetadataQuery{
+		Type:    metadata.QueryGetGroupState,
+		GroupID: req.GroupID,
+	})
+	if err != nil {
+		return JoinGroupResponse{}, fmt.Errorf("lookup group: %w", err)
+	}
+	var currentGroup *metadata.GroupState
+	if groupRaw != nil {
+		currentGroup = groupRaw.(*metadata.GroupState)
+	}
+
+	if currentGroup != nil && len(currentGroup.Members) > 0 {
+		for _, ms := range currentGroup.Members {
+			if !topicSetsEqual(ms.SubscribedTopics, req.Topics) {
+				return JoinGroupResponse{}, fmt.Errorf("%w: mixed topic subscriptions in group %q", ErrInvalidArgument, req.GroupID)
+			}
+			break
+		}
+	}
+
+	memberID := req.MemberID
+	if memberID == "" {
+		memberID = uuid.NewString()
+	}
+
+	memberIDs := []string{memberID}
+	if currentGroup != nil {
+		for id := range currentGroup.Members {
+			if id != memberID {
+				memberIDs = append(memberIDs, id)
+			}
+		}
+	}
+	newAssignment := rangeAssign(memberIDs, req.Topics, partitionCounts)
+
+	member := &metadata.MemberState{
+		MemberID:            memberID,
+		SubscribedTopics:    req.Topics,
+		SessionTimeoutMs:    req.SessionTimeoutMs,
+		HeartbeatIntervalMs: req.HeartbeatIntervalMs,
+		JoinedAt:            time.Now(),
+	}
+
+	if _, err = gc.nh.SyncProposeMetadata(ctx, metadata.MetadataCommand{
+		Type: metadata.CmdJoinConsumerGroup,
+		JoinConsumerGroup: &metadata.JoinConsumerGroupCmd{
+			GroupID:       req.GroupID,
+			MemberID:      memberID,
+			Member:        member,
+			NewAssignment: newAssignment,
+		},
+	}); err != nil {
+		return JoinGroupResponse{}, fmt.Errorf("propose join: %w", err)
+	}
+
+	raw2, err := gc.nh.LookupMetadata(ctx, metadata.MetadataQuery{
+		Type:    metadata.QueryGetGroupState,
+		GroupID: req.GroupID,
+	})
+	if err != nil {
+		return JoinGroupResponse{}, fmt.Errorf("lookup group after join: %w", err)
+	}
+	updatedGroup := raw2.(*metadata.GroupState)
+
+	gc.heartbeatMu.Lock()
+	if gc.lastHeartbeat[req.GroupID] == nil {
+		gc.lastHeartbeat[req.GroupID] = make(map[string]time.Time)
+	}
+	gc.lastHeartbeat[req.GroupID][memberID] = time.Now()
+	gc.heartbeatMu.Unlock()
+
+	return JoinGroupResponse{
+		MemberID:     memberID,
+		GenerationID: updatedGroup.GenerationID,
+		Assignments:  updatedGroup.Assignments[memberID],
+	}, nil
+}
+
+// LeaveGroup removes a member from the consumer group voluntarily.
+func (gc *GroupCoordinator) LeaveGroup(ctx context.Context, req LeaveGroupRequest) error {
+	groupRaw, err := gc.nh.LookupMetadata(ctx, metadata.MetadataQuery{
+		Type:    metadata.QueryGetGroupState,
+		GroupID: req.GroupID,
+	})
+	if err != nil {
+		return fmt.Errorf("lookup group: %w", err)
+	}
+	if groupRaw == nil {
+		return ErrNotGroupMember
+	}
+	currentGroup := groupRaw.(*metadata.GroupState)
+
+	ms, ok := currentGroup.Members[req.MemberID]
+	if !ok {
+		return ErrNotGroupMember
+	}
+
+	newMemberIDs := make([]string, 0, len(currentGroup.Members)-1)
+	for id := range currentGroup.Members {
+		if id != req.MemberID {
+			newMemberIDs = append(newMemberIDs, id)
+		}
+	}
+
+	partitionCounts := make(map[string]int32, len(ms.SubscribedTopics))
+	for _, topic := range ms.SubscribedTopics {
+		topicRaw, lookupErr := gc.nh.LookupMetadata(ctx, metadata.MetadataQuery{
+			Type:      metadata.QueryGetTopic,
+			TopicName: topic,
+		})
+		if lookupErr != nil {
+			if errors.Is(lookupErr, metadata.ErrNotFound) {
+				continue
+			}
+			return fmt.Errorf("lookup topic %q: %w", topic, lookupErr)
+		}
+		tm := topicRaw.(*metadata.TopicMeta)
+		partitionCounts[topic] = tm.PartitionCount
+	}
+	newAssignment := rangeAssign(newMemberIDs, ms.SubscribedTopics, partitionCounts)
+
+	if _, err = gc.nh.SyncProposeMetadata(ctx, metadata.MetadataCommand{
+		Type: metadata.CmdLeaveConsumerGroup,
+		LeaveConsumerGroup: &metadata.LeaveConsumerGroupCmd{
+			GroupID:       req.GroupID,
+			MemberID:      req.MemberID,
+			Reason:        "voluntary",
+			NewAssignment: newAssignment,
+		},
+	}); err != nil {
+		return fmt.Errorf("propose leave: %w", err)
+	}
+
+	gc.heartbeatMu.Lock()
+	if gc.lastHeartbeat[req.GroupID] != nil {
+		delete(gc.lastHeartbeat[req.GroupID], req.MemberID)
+	}
+	gc.heartbeatMu.Unlock()
+
+	return nil
+}
+
+// topicSetsEqual reports whether two topic slices contain the same elements (order-independent).
+func topicSetsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sa := make([]string, len(a))
+	copy(sa, a)
+	sort.Strings(sa)
+	sb := make([]string, len(b))
+	copy(sb, b)
+	sort.Strings(sb)
+	for i := range sa {
+		if sa[i] != sb[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// rangeAssign computes a range-based partition assignment across members.
+// Members with zero partitions still appear in the result with an empty slice.
+func rangeAssign(memberIDs []string, topics []string, partitionCounts map[string]int32) map[string][]metadata.TopicPartition {
+	if len(memberIDs) == 0 {
+		return map[string][]metadata.TopicPartition{}
+	}
+
+	sorted := make([]string, len(memberIDs))
+	copy(sorted, memberIDs)
+	sort.Strings(sorted)
+
+	sortedTopics := make([]string, len(topics))
+	copy(sortedTopics, topics)
+	sort.Strings(sortedTopics)
+
+	result := make(map[string][]metadata.TopicPartition, len(sorted))
+	for _, m := range sorted {
+		result[m] = []metadata.TopicPartition{}
+	}
+
+	for _, topic := range sortedTopics {
+		nPartitions := int(partitionCounts[topic])
+		if nPartitions == 0 {
+			continue
+		}
+		nMembers := len(sorted)
+		base := nPartitions / nMembers
+		remainder := nPartitions % nMembers
+		cursor := 0
+		for i, memberID := range sorted {
+			count := base
+			if i < remainder {
+				count++
+			}
+			for p := cursor; p < cursor+count; p++ {
+				result[memberID] = append(result[memberID], metadata.TopicPartition{
+					Topic:       topic,
+					PartitionID: int32(p),
+				})
+			}
+			cursor += count
+		}
+	}
+
+	return result
+}
