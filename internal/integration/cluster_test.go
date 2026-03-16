@@ -737,3 +737,348 @@ func TestCluster_LeaderFailover_FetchDuringElection(t *testing.T) {
 		t.Fatal("long-poll did not return within 15s after producing batch 5")
 	}
 }
+
+// groupCollect polls a slice of consumers in a round-robin loop, accumulating records
+// keyed by partition ID per consumer, until nPartitions distinct partition IDs have been
+// seen across all consumers or timeout elapses.
+func groupCollect(t *testing.T, consumers []*client.Consumer, nPartitions int, timeout time.Duration) []map[int32][]client.Record {
+	t.Helper()
+	results := make([]map[int32][]client.Record, len(consumers))
+	for i := range results {
+		results[i] = make(map[int32][]client.Record)
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		seen := make(map[int32]bool)
+		for _, m := range results {
+			for pid := range m {
+				seen[pid] = true
+			}
+		}
+		if len(seen) >= nPartitions {
+			break
+		}
+		for i, c := range consumers {
+			pollCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			recs, err := c.Poll(pollCtx, 1000)
+			cancel()
+			if err != nil {
+				t.Logf("groupCollect consumer %d poll: %v", i, err)
+				continue
+			}
+			for _, r := range recs {
+				results[i][r.PartitionID] = append(results[i][r.PartitionID], r)
+			}
+		}
+	}
+	return results
+}
+
+// produceRoundRobin sends nBatches batches distributed round-robin across nPartitions.
+func produceRoundRobin(t *testing.T, ctx context.Context, prod *client.Producer, topic string, nPartitions, nBatches int, prefix string) {
+	t.Helper()
+	for b := 0; b < nBatches; b++ {
+		part := int32(b % nPartitions)
+		val := fmt.Sprintf("%s-p%d-b%d", prefix, part, b/nPartitions)
+		batchData, encErr := storage.EncodeBatch([]storage.Record{
+			{TimestampMs: time.Now().UnixMilli(), Value: []byte(val)},
+		})
+		if encErr != nil {
+			t.Fatalf("encode batch: %v", encErr)
+		}
+		sendCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		_, sendErr := prod.SendBatch(sendCtx, topic, part, batchData, client.AcksAll)
+		cancel()
+		if sendErr != nil {
+			t.Fatalf("SendBatch %s p=%d: %v", prefix, part, sendErr)
+		}
+	}
+}
+
+// TestGroup_TwoConsumers_RangeAssignment starts a 3-broker cluster, creates a topic
+// with 4 partitions, produces 40 batches, and verifies that two consumers in the same
+// group each receive exactly 2 partitions with no overlap and full coverage.
+func TestGroup_TwoConsumers_RangeAssignment(t *testing.T) {
+	if brokerBinary == "" {
+		t.Skip("broker binary not available; skipping cluster test")
+	}
+
+	nodes := []clusterNode{
+		{1, 55093, 55091, 55092},
+		{2, 56093, 56091, 56092},
+		{3, 57093, 57091, 57092},
+	}
+	peers := clusterPeers(nodes)
+	for _, n := range nodes {
+		startBroker(t, n.id, n.raftPort, n.mgmtPort, n.dataPort, t.TempDir(), peers)
+	}
+
+	adminAddr := fmt.Sprintf("localhost:%d", nodes[0].mgmtPort)
+	waitClusterReady(t, adminAddr, 3, 30*time.Second)
+
+	ac, err := client.NewAdminClient(client.Config{
+		BootstrapServers: []string{adminAddr},
+		RequestTimeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new admin client: %v", err)
+	}
+	defer ac.Close() //nolint:errcheck
+
+	ctx := context.Background()
+	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+		Name:              "group-topic",
+		PartitionCount:    4,
+		ReplicationFactor: 3,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	waitPartitionsLeaders(t, adminAddr, "group-topic", 4, 15*time.Second)
+
+	bootstrapAddrs := clusterBootstrapAddrs(nodes)
+	prod, err := client.NewProducer(client.ProducerConfig{
+		Config: client.Config{
+			BootstrapServers: bootstrapAddrs,
+			RequestTimeout:   10 * time.Second,
+		},
+		DefaultAcks: client.AcksAll,
+	})
+	if err != nil {
+		t.Fatalf("new producer: %v", err)
+	}
+	defer prod.Close() //nolint:errcheck
+
+	const (
+		nPartitions    = 4
+		batchesPerPart = 10
+	)
+	produceRoundRobin(t, ctx, prod, "group-topic", nPartitions, nPartitions*batchesPerPart, "grp")
+
+	newGroupConsumer := func() *client.Consumer {
+		c, cerr := client.NewConsumer(client.ConsumerConfig{
+			Config: client.Config{
+				BootstrapServers: bootstrapAddrs,
+				RequestTimeout:   10 * time.Second,
+			},
+			GroupID:             "test-group",
+			MaxFetchBytes:       1 << 20,
+			MaxFetchWaitMs:      1000,
+			AutoOffsetReset:     client.OffsetResetEarliest,
+			HeartbeatIntervalMs: 1000,
+		})
+		if cerr != nil {
+			t.Fatalf("new consumer: %v", cerr)
+		}
+		return c
+	}
+
+	cons1 := newGroupConsumer()
+	defer cons1.Close() //nolint:errcheck
+	if err = cons1.Subscribe([]string{"group-topic"}); err != nil {
+		t.Fatalf("cons1.Subscribe: %v", err)
+	}
+
+	cons2 := newGroupConsumer()
+	defer cons2.Close() //nolint:errcheck
+	if err = cons2.Subscribe([]string{"group-topic"}); err != nil {
+		t.Fatalf("cons2.Subscribe: %v", err)
+	}
+
+	// Wait for cons1's heartbeat to detect rebalance_required and re-join.
+	// With HeartbeatIntervalMs=1000ms, 5 seconds covers multiple heartbeat cycles.
+	time.Sleep(5 * time.Second)
+
+	// Collect records from both consumers in their stable assignments.
+	results := groupCollect(t, []*client.Consumer{cons1, cons2}, nPartitions, 30*time.Second)
+	r1, r2 := results[0], results[1]
+
+	for pid := range r1 {
+		if _, ok := r2[pid]; ok {
+			t.Errorf("partition %d appears in both consumers (overlap)", pid)
+		}
+	}
+	for p := int32(0); p < nPartitions; p++ {
+		_, in1 := r1[p]
+		_, in2 := r2[p]
+		if !in1 && !in2 {
+			t.Errorf("partition %d not covered by either consumer", p)
+		}
+	}
+	if len(r1) != 2 {
+		t.Errorf("consumer1 covers %d partitions, want 2", len(r1))
+	}
+	if len(r2) != 2 {
+		t.Errorf("consumer2 covers %d partitions, want 2", len(r2))
+	}
+	total := 0
+	for _, recs := range r1 {
+		total += len(recs)
+	}
+	for _, recs := range r2 {
+		total += len(recs)
+	}
+	if total < nPartitions*batchesPerPart {
+		t.Errorf("total records: got %d, want >= %d", total, nPartitions*batchesPerPart)
+	}
+}
+
+// TestGroup_VoluntaryLeave_TriggersRebalance verifies that Consumer3.Close() sends
+// LeaveGroup, which causes the group coordinator to rebalance so that Consumer1 and
+// Consumer2 together cover all 3 partitions. New batches produced after the rebalance
+// are fully received by the remaining two consumers.
+func TestGroup_VoluntaryLeave_TriggersRebalance(t *testing.T) {
+	if brokerBinary == "" {
+		t.Skip("broker binary not available; skipping cluster test")
+	}
+
+	nodes := []clusterNode{
+		{1, 58093, 58091, 58092},
+		{2, 59093, 59091, 59092},
+		{3, 60093, 60091, 60092},
+	}
+	peers := clusterPeers(nodes)
+	for _, n := range nodes {
+		startBroker(t, n.id, n.raftPort, n.mgmtPort, n.dataPort, t.TempDir(), peers)
+	}
+
+	adminAddr := fmt.Sprintf("localhost:%d", nodes[0].mgmtPort)
+	waitClusterReady(t, adminAddr, 3, 30*time.Second)
+
+	ac, err := client.NewAdminClient(client.Config{
+		BootstrapServers: []string{adminAddr},
+		RequestTimeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new admin client: %v", err)
+	}
+	defer ac.Close() //nolint:errcheck
+
+	ctx := context.Background()
+	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+		Name:              "leave-topic",
+		PartitionCount:    3,
+		ReplicationFactor: 3,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	waitPartitionsLeaders(t, adminAddr, "leave-topic", 3, 15*time.Second)
+
+	bootstrapAddrs := clusterBootstrapAddrs(nodes)
+	prod, err := client.NewProducer(client.ProducerConfig{
+		Config: client.Config{
+			BootstrapServers: bootstrapAddrs,
+			RequestTimeout:   10 * time.Second,
+		},
+		DefaultAcks: client.AcksAll,
+	})
+	if err != nil {
+		t.Fatalf("new producer: %v", err)
+	}
+	defer prod.Close() //nolint:errcheck
+
+	const (
+		nPartitions    = 3
+		initialBatches = 10 // per partition; total = 30
+	)
+	produceRoundRobin(t, ctx, prod, "leave-topic", nPartitions, nPartitions*initialBatches, "leave-pre")
+
+	newLeaveConsumer := func() *client.Consumer {
+		c, cerr := client.NewConsumer(client.ConsumerConfig{
+			Config: client.Config{
+				BootstrapServers: bootstrapAddrs,
+				RequestTimeout:   10 * time.Second,
+			},
+			GroupID:             "leave-group",
+			MaxFetchBytes:       1 << 20,
+			MaxFetchWaitMs:      1000,
+			AutoOffsetReset:     client.OffsetResetEarliest,
+			HeartbeatIntervalMs: 1000,
+		})
+		if cerr != nil {
+			t.Fatalf("new consumer: %v", cerr)
+		}
+		return c
+	}
+
+	cons1 := newLeaveConsumer()
+	defer cons1.Close() //nolint:errcheck
+	if err = cons1.Subscribe([]string{"leave-topic"}); err != nil {
+		t.Fatalf("cons1.Subscribe: %v", err)
+	}
+
+	cons2 := newLeaveConsumer()
+	defer cons2.Close() //nolint:errcheck
+	if err = cons2.Subscribe([]string{"leave-topic"}); err != nil {
+		t.Fatalf("cons2.Subscribe: %v", err)
+	}
+
+	cons3 := newLeaveConsumer()
+	if err = cons3.Subscribe([]string{"leave-topic"}); err != nil {
+		// cons3 may fail to close on cleanup, so we still try.
+		_ = cons3.Close()
+		t.Fatalf("cons3.Subscribe: %v", err)
+	}
+
+	// Wait for all three rebalances to settle (one per join).
+	time.Sleep(5 * time.Second)
+
+	// Verify initial stable assignment: all 3 partitions covered across 3 consumers.
+	initResults := groupCollect(t, []*client.Consumer{cons1, cons2, cons3}, nPartitions, 20*time.Second)
+	for p := int32(0); p < nPartitions; p++ {
+		covered := false
+		for _, m := range initResults {
+			if _, ok := m[p]; ok {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("initial assignment: partition %d not covered", p)
+		}
+	}
+
+	// cons3 leaves voluntarily; its Close() sends LeaveGroup to the coordinator.
+	if err = cons3.Close(); err != nil {
+		t.Logf("cons3.Close: %v", err)
+	}
+
+	// Wait for cons1 and cons2 to detect the rebalance via heartbeat and re-join.
+	time.Sleep(5 * time.Second)
+
+	// After rebalance, cons1+cons2 together must cover all 3 partitions.
+	postResults := groupCollect(t, []*client.Consumer{cons1, cons2}, nPartitions, 15*time.Second)
+	for p := int32(0); p < nPartitions; p++ {
+		_, in1 := postResults[0][p]
+		_, in2 := postResults[1][p]
+		if !in1 && !in2 {
+			t.Errorf("after rebalance: partition %d not covered by cons1 or cons2", p)
+		}
+	}
+
+	// Produce 10 more batches and verify both remaining consumers receive them.
+	produceRoundRobin(t, ctx, prod, "leave-topic", nPartitions, 10, "leave-post")
+
+	// Poll until records with offset >= initialBatches appear from all 3 partitions.
+	deadline := time.Now().Add(30 * time.Second)
+	newRecordsSeen := make(map[int32]bool)
+	for time.Now().Before(deadline) && len(newRecordsSeen) < nPartitions {
+		for i, c := range []*client.Consumer{cons1, cons2} {
+			pollCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+			recs, pollErr := c.Poll(pollCtx, 1000)
+			cancel()
+			if pollErr != nil {
+				t.Logf("post-rebalance poll consumer %d: %v", i+1, pollErr)
+				continue
+			}
+			for _, r := range recs {
+				if r.Offset >= int64(initialBatches) {
+					newRecordsSeen[r.PartitionID] = true
+				}
+			}
+		}
+	}
+	if len(newRecordsSeen) < nPartitions {
+		t.Errorf("after rebalance: new batches seen on %d/%d partitions, want all %d",
+			len(newRecordsSeen), nPartitions, nPartitions)
+	}
+}
