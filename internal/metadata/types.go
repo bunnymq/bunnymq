@@ -272,6 +272,8 @@ const (
 	// QueryGetGroupOffsets returns map[TopicPartition]int64 for the requested
 	// partitions; missing entries return -1.
 	QueryGetGroupOffsets QueryType = "get_group_offsets"
+	// QueryGetAllGroupStates returns map[string]*GroupState for all groups.
+	QueryGetAllGroupStates QueryType = "get_all_group_states"
 )
 
 type MetadataQuery struct {

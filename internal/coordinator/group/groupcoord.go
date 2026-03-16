@@ -34,6 +34,7 @@ type GroupCoordinatorConfig struct {
 type nodeHostIface interface {
 	SyncProposeMetadata(ctx context.Context, cmd metadata.MetadataCommand) (sm.Result, error)
 	LookupMetadata(ctx context.Context, q metadata.MetadataQuery) (interface{}, error)
+	GetLeaderID(shardID uint64) (leaderID uint64, term uint64, valid bool, err error)
 }
 
 // JoinGroupRequest holds the parameters for a JoinGroup call.
@@ -316,6 +317,154 @@ func (gc *GroupCoordinator) FetchCommittedOffsets(ctx context.Context, groupID s
 	}
 	result, _ := raw.(map[metadata.TopicPartition]int64)
 	return result, nil
+}
+
+// Heartbeat records the member's liveness and signals whether a rebalance is pending.
+func (gc *GroupCoordinator) Heartbeat(_ context.Context, groupID, memberID string, generationID int32) (rebalanceRequired bool, err error) {
+	raw, lookupErr := gc.nh.LookupMetadata(context.Background(), metadata.MetadataQuery{
+		Type:    metadata.QueryGetGroupState,
+		GroupID: groupID,
+	})
+	if lookupErr != nil {
+		return false, fmt.Errorf("lookup group: %w", lookupErr)
+	}
+	if raw == nil {
+		return false, ErrNotGroupMember
+	}
+	group := raw.(*metadata.GroupState)
+	if _, ok := group.Members[memberID]; !ok {
+		return false, ErrNotGroupMember
+	}
+
+	gc.heartbeatMu.Lock()
+	if gc.lastHeartbeat[groupID] == nil {
+		gc.lastHeartbeat[groupID] = make(map[string]time.Time)
+	}
+	gc.lastHeartbeat[groupID][memberID] = time.Now()
+	gc.heartbeatMu.Unlock()
+
+	return group.GenerationID > generationID, nil
+}
+
+// RebuildHeartbeatTable seeds the in-memory heartbeat table with the current
+// time for all active group members, giving them a full session timeout window
+// before the first possible sweep eviction.
+func (gc *GroupCoordinator) RebuildHeartbeatTable() {
+	raw, err := gc.nh.LookupMetadata(context.Background(), metadata.MetadataQuery{
+		Type: metadata.QueryGetAllGroupStates,
+	})
+	if err != nil {
+		return
+	}
+	groups, ok := raw.(map[string]*metadata.GroupState)
+	if !ok || groups == nil {
+		return
+	}
+
+	now := time.Now()
+	gc.heartbeatMu.Lock()
+	defer gc.heartbeatMu.Unlock()
+	for groupID, group := range groups {
+		if gc.lastHeartbeat[groupID] == nil {
+			gc.lastHeartbeat[groupID] = make(map[string]time.Time)
+		}
+		for memberID := range group.Members {
+			gc.lastHeartbeat[groupID][memberID] = now
+		}
+	}
+}
+
+// Start launches the session timeout sweep goroutine; it stops when ctx is cancelled.
+func (gc *GroupCoordinator) Start(ctx context.Context) {
+	go gc.sessionTimeoutSweep(ctx)
+}
+
+func (gc *GroupCoordinator) sessionTimeoutSweep(ctx context.Context) {
+	ticker := time.NewTicker(time.Duration(gc.config.SweepIntervalMs) * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			gc.sweepOnce(ctx)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (gc *GroupCoordinator) sweepOnce(ctx context.Context) {
+	leaderID, _, valid, err := gc.nh.GetLeaderID(gc.config.MetadataShardID)
+	if err != nil || !valid || leaderID != gc.config.ThisNodeID {
+		return
+	}
+
+	raw, err := gc.nh.LookupMetadata(ctx, metadata.MetadataQuery{Type: metadata.QueryGetAllGroupStates})
+	if err != nil {
+		return
+	}
+	groups, ok := raw.(map[string]*metadata.GroupState)
+	if !ok {
+		return
+	}
+
+	now := time.Now()
+	for groupID, group := range groups {
+		for memberID, ms := range group.Members {
+			gc.heartbeatMu.RLock()
+			var lastHB time.Time
+			var exists bool
+			if gc.lastHeartbeat[groupID] != nil {
+				lastHB, exists = gc.lastHeartbeat[groupID][memberID]
+			}
+			gc.heartbeatMu.RUnlock()
+
+			if !exists {
+				continue
+			}
+			sessionTimeout := time.Duration(ms.SessionTimeoutMs) * time.Millisecond
+			if now.Sub(lastHB) <= sessionTimeout {
+				continue
+			}
+
+			remainingMembers := make([]string, 0, len(group.Members)-1)
+			for id := range group.Members {
+				if id != memberID {
+					remainingMembers = append(remainingMembers, id)
+				}
+			}
+			partitionCounts := make(map[string]int32, len(ms.SubscribedTopics))
+			for _, topic := range ms.SubscribedTopics {
+				topicRaw, lookupErr := gc.nh.LookupMetadata(ctx, metadata.MetadataQuery{
+					Type:      metadata.QueryGetTopic,
+					TopicName: topic,
+				})
+				if lookupErr != nil || topicRaw == nil {
+					continue
+				}
+				tm := topicRaw.(*metadata.TopicMeta)
+				partitionCounts[topic] = tm.PartitionCount
+			}
+			newAssignment := rangeAssign(remainingMembers, ms.SubscribedTopics, partitionCounts)
+
+			if _, proposeErr := gc.nh.SyncProposeMetadata(ctx, metadata.MetadataCommand{
+				Type: metadata.CmdLeaveConsumerGroup,
+				LeaveConsumerGroup: &metadata.LeaveConsumerGroupCmd{
+					GroupID:       groupID,
+					MemberID:      memberID,
+					Reason:        "timeout",
+					NewAssignment: newAssignment,
+				},
+			}); proposeErr != nil {
+				continue
+			}
+
+			gc.heartbeatMu.Lock()
+			if gc.lastHeartbeat[groupID] != nil {
+				delete(gc.lastHeartbeat[groupID], memberID)
+			}
+			gc.heartbeatMu.Unlock()
+		}
+	}
 }
 
 // topicSetsEqual reports whether two topic slices contain the same elements (order-independent).

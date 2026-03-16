@@ -511,6 +511,17 @@ func (fsm *MetadataFSM) lookupGroupState(query MetadataQuery) (interface{}, erro
 	case QueryGetGroupOffsets:
 		return fsm.lookupGroupOffsets(query.GroupID, query.Partitions), nil
 
+	case QueryGetAllGroupStates:
+		if fsm.state.GroupStates == nil {
+			return map[string]*GroupState{}, nil
+		}
+		result := make(map[string]*GroupState, len(fsm.state.GroupStates))
+		for k, v := range fsm.state.GroupStates {
+			c := *v
+			result[k] = &c
+		}
+		return result, nil
+
 	default:
 		return nil, fmt.Errorf("unknown query type: %q", query.Type)
 	}
