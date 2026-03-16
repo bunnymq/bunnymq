@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,25 +27,30 @@ type ConsumerConfig struct {
 
 // Consumer reads messages from BunnyMQ topics.
 // In manual mode (empty GroupID) the caller manages partition selection and offsets via Seek.
-// Safe for sequential use from a single goroutine.
+// Safe for sequential use from a single goroutine; the heartbeat goroutine accesses shared
+// state under mu.
 type Consumer struct {
-	config              ConsumerConfig
-	pool                *iclient.ConnPool
-	meta                *iclient.MetaCache
-	decoder             *iclient.BatchDecoder
-	fetchOffsets        map[TP]int64
-	soughtPartitions    []TP
-	subscribedTopics    []string
-	knownAddrs          []string
-	memberID            string
-	generationID        int32
-	coordAddr           string
-	assignedPartitions  []TP
-	stopHeartbeat       context.CancelFunc
-	// rebalancing is set to true by heartbeatLoop before calling rebalance() and
-	// back to false by rebalance() on completion. Poll checks it so that fetches
-	// are paused until the new assignment is active.
-	rebalancing         atomic.Bool
+	config      ConsumerConfig
+	pool        *iclient.ConnPool
+	meta        *iclient.MetaCache
+	decoder     *iclient.BatchDecoder
+	knownAddrs  []string
+	stopHeartbeat context.CancelFunc
+
+	// mu protects all fields below.
+	mu                 sync.Mutex
+	fetchOffsets       map[TP]int64
+	soughtPartitions   []TP
+	subscribedTopics   []string
+	memberID           string
+	generationID       int32
+	coordAddr          string
+	assignedPartitions []TP
+
+	// rebalancing is set to true by heartbeatLoop before calling rebalance() and back to
+	// false after rebalance() completes. Poll waits on it so fetches don't use stale
+	// assignment state. It must be set/cleared with mu NOT held to avoid deadlock with Poll.
+	rebalancing atomic.Bool
 }
 
 // NewConsumer creates a Consumer.
@@ -104,7 +110,10 @@ func NewConsumer(config ConsumerConfig) (*Consumer, error) {
 // In group mode, Subscribe discovers the group coordinator, issues JoinGroup,
 // fetches committed offsets for assigned partitions, and seeks each one.
 func (c *Consumer) Subscribe(topics []string) error {
+	c.mu.Lock()
 	c.subscribedTopics = topics
+	c.mu.Unlock()
+
 	if c.config.GroupID == "" {
 		return nil
 	}
@@ -130,7 +139,9 @@ func (c *Consumer) joinGroup(ctx context.Context, topics []string) error {
 		}
 		// Refresh coordinator address from the NOT_LEADER detail and retry once.
 		if notLeader != nil && notLeader.LeaderAddress != "" {
+			c.mu.Lock()
 			c.coordAddr = notLeader.LeaderAddress
+			c.mu.Unlock()
 		} else if refreshErr := c.findCoordinator(ctx); refreshErr != nil {
 			return err
 		}
@@ -140,22 +151,29 @@ func (c *Consumer) joinGroup(ctx context.Context, topics []string) error {
 		}
 	}
 
+	c.mu.Lock()
 	c.memberID = resp.MemberId
 	c.generationID = resp.GenerationId
 	c.assignedPartitions = protoToTP(resp.Assignments)
+	c.mu.Unlock()
 
 	return c.initFetchOffsets(ctx)
 }
 
 func (c *Consumer) doJoinGroup(ctx context.Context, topics []string) (*pb.JoinGroupResponse, error) {
-	conn, err := c.pool.Get(c.coordAddr)
+	c.mu.Lock()
+	coordAddr := c.coordAddr
+	memberID := c.memberID
+	c.mu.Unlock()
+
+	conn, err := c.pool.Get(coordAddr)
 	if err != nil {
 		return nil, err
 	}
 	callCtx, cancel := context.WithTimeout(ctx, c.config.RequestTimeout)
 	resp, err := pb.NewDataServiceClient(conn).JoinGroup(callCtx, &pb.JoinGroupRequest{
 		GroupId:          c.config.GroupID,
-		MemberId:         c.memberID,
+		MemberId:         memberID,
 		SubscribedTopics: topics,
 	})
 	cancel()
@@ -178,11 +196,13 @@ func (c *Consumer) findCoordinator(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
+		c.mu.Lock()
 		if len(resp.Nodes) > 0 {
 			c.coordAddr = resp.Nodes[0].Address
 		} else {
 			c.coordAddr = addr
 		}
+		c.mu.Unlock()
 		return nil
 	}
 	return ErrNoReachableServer
@@ -191,16 +211,21 @@ func (c *Consumer) findCoordinator(ctx context.Context) error {
 // initFetchOffsets fetches committed offsets for all assigned partitions from
 // the coordinator and seeks each partition to the appropriate starting offset.
 func (c *Consumer) initFetchOffsets(ctx context.Context) error {
-	if len(c.assignedPartitions) == 0 {
+	c.mu.Lock()
+	assigned := append([]TP(nil), c.assignedPartitions...)
+	coordAddr := c.coordAddr
+	c.mu.Unlock()
+
+	if len(assigned) == 0 {
 		return nil
 	}
 
-	partitions := make([]*pb.TopicPartition, len(c.assignedPartitions))
-	for i, tp := range c.assignedPartitions {
+	partitions := make([]*pb.TopicPartition, len(assigned))
+	for i, tp := range assigned {
 		partitions[i] = &pb.TopicPartition{Topic: tp.Topic, PartitionId: tp.PartitionID}
 	}
 
-	conn, err := c.pool.Get(c.coordAddr)
+	conn, err := c.pool.Get(coordAddr)
 	if err != nil {
 		return err
 	}
@@ -219,7 +244,7 @@ func (c *Consumer) initFetchOffsets(ctx context.Context) error {
 		committed[TP{Topic: po.Topic, PartitionID: po.PartitionId}] = po.Offset
 	}
 
-	for _, tp := range c.assignedPartitions {
+	for _, tp := range assigned {
 		if off, ok := committed[tp]; ok && off > -1 {
 			c.Seek(tp.Topic, tp.PartitionID, off)
 			continue
@@ -266,10 +291,18 @@ func (c *Consumer) getPartitionOffset(ctx context.Context, tp TP, queryType pb.O
 // Calling Seek again on the same partition updates the offset in place.
 func (c *Consumer) Seek(topic string, partitionID int32, offset int64) {
 	tp := TP{Topic: topic, PartitionID: partitionID}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if _, ok := c.fetchOffsets[tp]; !ok {
 		c.soughtPartitions = append(c.soughtPartitions, tp)
 	}
 	c.fetchOffsets[tp] = offset
+}
+
+// partitionWork bundles a TP with the fetch offset snapshot taken under mu.
+type partitionWork struct {
+	tp  TP
+	off int64
 }
 
 // Poll fetches records from all sought partitions.
@@ -287,36 +320,46 @@ func (c *Consumer) Poll(ctx context.Context, maxWaitMs int64) ([]Record, error) 
 		}
 	}
 
+	c.mu.Lock()
 	if len(c.soughtPartitions) == 0 {
+		c.mu.Unlock()
 		return nil, nil
 	}
+	work := make([]partitionWork, len(c.soughtPartitions))
+	for i, tp := range c.soughtPartitions {
+		work[i] = partitionWork{tp: tp, off: c.fetchOffsets[tp]}
+	}
+	c.mu.Unlock()
 
 	deadline := time.Now().Add(time.Duration(maxWaitMs) * time.Millisecond)
 	var out []Record
 
-	for i, tp := range c.soughtPartitions {
+	for i, pw := range work {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
 		}
-		perPartitionWaitMs := remaining.Milliseconds() / int64(len(c.soughtPartitions)-i)
+		perPartitionWaitMs := remaining.Milliseconds() / int64(len(work)-i)
 		if perPartitionWaitMs > c.config.MaxFetchWaitMs {
 			perPartitionWaitMs = c.config.MaxFetchWaitMs
 		}
 
-		recs, err := c.fetchPartition(ctx, tp, perPartitionWaitMs)
+		recs, nextOff, err := c.fetchPartition(ctx, pw.tp, pw.off, perPartitionWaitMs)
 		if err != nil {
 			bunnyErr, notLeader := extractErr(err)
 			if bunnyErr != nil && bunnyErr.Code == pb.BunnyErrorCode_NOT_LEADER {
 				if notLeader != nil && notLeader.LeaderAddress != "" {
-					c.meta.SetLeader(tp.Topic, tp.PartitionID, notLeader.LeaderAddress)
+					c.meta.SetLeader(pw.tp.Topic, pw.tp.PartitionID, notLeader.LeaderAddress)
 				} else {
-					c.meta.Invalidate(tp.Topic)
+					c.meta.Invalidate(pw.tp.Topic)
 				}
 				continue
 			}
 			return nil, err
 		}
+		c.mu.Lock()
+		c.fetchOffsets[pw.tp] = nextOff
+		c.mu.Unlock()
 		out = append(out, recs...)
 	}
 
@@ -329,10 +372,12 @@ func (c *Consumer) Commit(ctx context.Context) error {
 	if c.config.GroupID == "" {
 		return nil
 	}
+	c.mu.Lock()
 	offsets := make(map[TP]int64, len(c.soughtPartitions))
 	for _, tp := range c.soughtPartitions {
 		offsets[tp] = c.fetchOffsets[tp]
 	}
+	c.mu.Unlock()
 	return c.CommitOffsets(ctx, offsets)
 }
 
@@ -353,15 +398,21 @@ func (c *Consumer) CommitOffsets(ctx context.Context, offsets map[TP]int64) erro
 		})
 	}
 
-	conn, err := c.pool.Get(c.coordAddr)
+	c.mu.Lock()
+	coordAddr := c.coordAddr
+	memberID := c.memberID
+	generationID := c.generationID
+	c.mu.Unlock()
+
+	conn, err := c.pool.Get(coordAddr)
 	if err != nil {
 		return err
 	}
 	callCtx, cancel := context.WithTimeout(ctx, c.config.RequestTimeout)
 	_, err = pb.NewDataServiceClient(conn).CommitOffset(callCtx, &pb.CommitOffsetRequest{
 		GroupId:      c.config.GroupID,
-		MemberId:     c.memberID,
-		GenerationId: c.generationID,
+		MemberId:     memberID,
+		GenerationId: generationID,
 		Offsets:      protoOffsets,
 	})
 	cancel()
@@ -379,14 +430,18 @@ func (c *Consumer) CommitOffsets(ctx context.Context, offsets map[TP]int64) erro
 func (c *Consumer) Close() error {
 	if c.config.GroupID != "" && c.stopHeartbeat != nil {
 		c.stopHeartbeat()
-		if c.coordAddr != "" && c.memberID != "" {
-			conn, err := c.pool.Get(c.coordAddr)
+		c.mu.Lock()
+		coordAddr := c.coordAddr
+		memberID := c.memberID
+		c.mu.Unlock()
+		if coordAddr != "" && memberID != "" {
+			conn, err := c.pool.Get(coordAddr)
 			if err == nil {
 				ctx, cancel := context.WithTimeout(context.Background(), c.config.RequestTimeout)
 				//nolint:errcheck
 				pb.NewDataServiceClient(conn).LeaveGroup(ctx, &pb.LeaveGroupRequest{
 					GroupId:  c.config.GroupID,
-					MemberId: c.memberID,
+					MemberId: memberID,
 				})
 				cancel()
 			}
@@ -395,42 +450,40 @@ func (c *Consumer) Close() error {
 	return c.pool.Close()
 }
 
-// fetchPartition sends one Fetch RPC for tp and returns decoded records.
-// On success, advances fetchOffsets[tp] to resp.NextOffset.
-func (c *Consumer) fetchPartition(ctx context.Context, tp TP, waitMs int64) ([]Record, error) {
+// fetchPartition sends one Fetch RPC for tp starting at the given offset.
+// Returns the decoded records and the next fetch offset to use.
+func (c *Consumer) fetchPartition(ctx context.Context, tp TP, offset int64, waitMs int64) ([]Record, int64, error) {
 	addr, err := c.leaderFor(ctx, tp.Topic, tp.PartitionID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	conn, err := c.pool.Get(addr)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, c.config.RequestTimeout)
 	resp, rpcErr := pb.NewDataServiceClient(conn).Fetch(callCtx, &pb.FetchRequest{
 		Topic:       tp.Topic,
 		PartitionId: tp.PartitionID,
-		Offset:      c.fetchOffsets[tp],
+		Offset:      offset,
 		MaxBytes:    int32(c.config.MaxFetchBytes),
 		MaxWaitMs:   waitMs,
 	})
 	cancel()
 	if rpcErr != nil {
-		return nil, rpcErr
+		return nil, 0, rpcErr
 	}
 
 	if len(resp.Records) == 0 {
-		return nil, nil
+		return nil, resp.NextOffset, nil
 	}
 
 	decoded, decErr := c.decoder.Decode(resp.Records)
 	if decErr != nil {
-		return nil, decErr
+		return nil, 0, decErr
 	}
-
-	c.fetchOffsets[tp] = resp.NextOffset
 
 	out := make([]Record, len(decoded))
 	for i, dr := range decoded {
@@ -444,7 +497,7 @@ func (c *Consumer) fetchPartition(ctx context.Context, tp TP, waitMs int64) ([]R
 			TimestampMs: dr.TimestampMs,
 		}
 	}
-	return out, nil
+	return out, resp.NextOffset, nil
 }
 
 // leaderFor returns the Data API address of the current leader for the given partition.
@@ -535,8 +588,8 @@ func protoToTP(protos []*pb.TopicPartition) []TP {
 }
 
 // heartbeatLoop sends periodic Heartbeat RPCs until ctx is cancelled.
-// It runs synchronously (not in a separate goroutine) so that rebalancing is
-// cleared before Poll resumes — callers must not call rebalance() concurrently.
+// rebalance() is called synchronously (not spawned) so that the rebalancing flag is
+// cleared before Poll resumes — this invariant serialises Poll and rebalance on state.
 func (c *Consumer) heartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(c.config.HeartbeatIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
@@ -545,15 +598,21 @@ func (c *Consumer) heartbeatLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			conn, err := c.pool.Get(c.coordAddr)
+			c.mu.Lock()
+			coordAddr := c.coordAddr
+			memberID := c.memberID
+			generationID := c.generationID
+			c.mu.Unlock()
+
+			conn, err := c.pool.Get(coordAddr)
 			if err != nil {
 				continue
 			}
 			callCtx, cancel := context.WithTimeout(ctx, c.config.RequestTimeout)
 			resp, err := pb.NewDataServiceClient(conn).Heartbeat(callCtx, &pb.HeartbeatRequest{
 				GroupId:      c.config.GroupID,
-				MemberId:     c.memberID,
-				GenerationId: c.generationID,
+				MemberId:     memberID,
+				GenerationId: generationID,
 			})
 			cancel()
 			if err != nil {
@@ -564,7 +623,9 @@ func (c *Consumer) heartbeatLoop(ctx context.Context) {
 				switch bunnyErr.Code {
 				case pb.BunnyErrorCode_NOT_LEADER:
 					if notLeader != nil && notLeader.LeaderAddress != "" {
+						c.mu.Lock()
 						c.coordAddr = notLeader.LeaderAddress
+						c.mu.Unlock()
 					} else {
 						_ = c.findCoordinator(ctx)
 					}
@@ -585,13 +646,15 @@ func (c *Consumer) heartbeatLoop(ctx context.Context) {
 }
 
 // rebalance re-issues JoinGroup and re-seeks committed offsets for the new assignment.
-// It must be called synchronously from heartbeatLoop so that rebalancing is cleared
-// before Poll resumes.
+// Must be called from heartbeatLoop (not in a separate goroutine) so that rebalancing is
+// cleared before Poll resumes.
 func (c *Consumer) rebalance(ctx context.Context) {
-	// Clear old fetch state so Poll doesn't fetch from stale partitions.
+	c.mu.Lock()
 	c.soughtPartitions = nil
 	c.fetchOffsets = make(map[TP]int64)
+	topics := append([]string(nil), c.subscribedTopics...)
+	c.mu.Unlock()
 
-	_ = c.joinGroup(ctx, c.subscribedTopics)
+	_ = c.joinGroup(ctx, topics)
 	c.rebalancing.Store(false)
 }

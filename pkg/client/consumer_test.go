@@ -849,14 +849,20 @@ func TestConsumer_Heartbeat_RebalanceRequired_TriggersRejoin(t *testing.T) {
 	// Wait for the first heartbeat to fire and rebalance to complete.
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if c.generationID == 2 {
+		c.mu.Lock()
+		gen := c.generationID
+		c.mu.Unlock()
+		if gen == 2 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if c.generationID != 2 {
-		t.Errorf("generationID = %d, want 2 after rebalance", c.generationID)
+	c.mu.Lock()
+	gen := c.generationID
+	c.mu.Unlock()
+	if gen != 2 {
+		t.Errorf("generationID = %d, want 2 after rebalance", gen)
 	}
 
 	ts.dataSvc.mu.Lock()
@@ -904,8 +910,11 @@ func TestConsumer_Heartbeat_NotLeader_RefreshesCoord(t *testing.T) {
 	time.Sleep(time.Duration(3*intervalMs) * time.Millisecond)
 
 	// coordAddr must now be serverB.
-	if c.coordAddr != serverB.addr {
-		t.Errorf("coordAddr = %q after NOT_LEADER, want %q", c.coordAddr, serverB.addr)
+	c.mu.Lock()
+	addr := c.coordAddr
+	c.mu.Unlock()
+	if addr != serverB.addr {
+		t.Errorf("coordAddr = %q after NOT_LEADER, want %q", addr, serverB.addr)
 	}
 
 	// serverB should have received at least one heartbeat.
@@ -939,14 +948,20 @@ func TestConsumer_Heartbeat_NotGroupMember_Rebalance(t *testing.T) {
 
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if c.generationID == 2 {
+		c.mu.Lock()
+		gen := c.generationID
+		c.mu.Unlock()
+		if gen == 2 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if c.generationID != 2 {
-		t.Errorf("generationID = %d, want 2 after NOT_GROUP_MEMBER rebalance", c.generationID)
+	c.mu.Lock()
+	gen := c.generationID
+	c.mu.Unlock()
+	if gen != 2 {
+		t.Errorf("generationID = %d, want 2 after NOT_GROUP_MEMBER rebalance", gen)
 	}
 }
 
