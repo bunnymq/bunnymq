@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	iclient "github.com/bunnymq/bunnymq/internal/client"
@@ -16,10 +17,11 @@ import (
 // ConsumerConfig extends Config with consumer-specific settings.
 type ConsumerConfig struct {
 	Config
-	GroupID         string
-	MaxFetchBytes   int
-	MaxFetchWaitMs  int64
-	AutoOffsetReset OffsetResetPolicy
+	GroupID             string
+	MaxFetchBytes       int
+	MaxFetchWaitMs      int64
+	AutoOffsetReset     OffsetResetPolicy
+	HeartbeatIntervalMs int64
 }
 
 // Consumer reads messages from BunnyMQ topics.
@@ -38,6 +40,11 @@ type Consumer struct {
 	generationID        int32
 	coordAddr           string
 	assignedPartitions  []TP
+	stopHeartbeat       context.CancelFunc
+	// rebalancing is set to true by heartbeatLoop before calling rebalance() and
+	// back to false by rebalance() on completion. Poll checks it so that fetches
+	// are paused until the new assignment is active.
+	rebalancing         atomic.Bool
 }
 
 // NewConsumer creates a Consumer.
@@ -66,6 +73,9 @@ func NewConsumer(config ConsumerConfig) (*Consumer, error) {
 	}
 	if config.MaxFetchWaitMs <= 0 {
 		config.MaxFetchWaitMs = 500
+	}
+	if config.HeartbeatIntervalMs <= 0 {
+		config.HeartbeatIntervalMs = 3000
 	}
 
 	var dialOpts []grpc.DialOption
@@ -98,7 +108,13 @@ func (c *Consumer) Subscribe(topics []string) error {
 	if c.config.GroupID == "" {
 		return nil
 	}
-	return c.joinGroup(context.Background(), topics)
+	if err := c.joinGroup(context.Background(), topics); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.stopHeartbeat = cancel
+	go c.heartbeatLoop(ctx)
+	return nil
 }
 
 func (c *Consumer) joinGroup(ctx context.Context, topics []string) error {
@@ -261,6 +277,16 @@ func (c *Consumer) Seek(topic string, partitionID int32, offset int64) {
 // On NOT_LEADER, the metadata cache is updated and the partition is skipped
 // (no error returned); it will be retried on the next Poll.
 func (c *Consumer) Poll(ctx context.Context, maxWaitMs int64) ([]Record, error) {
+	if c.config.GroupID != "" {
+		for c.rebalancing.Load() {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}
+
 	if len(c.soughtPartitions) == 0 {
 		return nil, nil
 	}
@@ -349,8 +375,25 @@ func (c *Consumer) CommitOffsets(ctx context.Context, offsets map[TP]int64) erro
 	return nil
 }
 
-// Close releases all gRPC connections.
-func (c *Consumer) Close() error { return c.pool.Close() }
+// Close stops the heartbeat goroutine, sends LeaveGroup, and releases all connections.
+func (c *Consumer) Close() error {
+	if c.config.GroupID != "" && c.stopHeartbeat != nil {
+		c.stopHeartbeat()
+		if c.coordAddr != "" && c.memberID != "" {
+			conn, err := c.pool.Get(c.coordAddr)
+			if err == nil {
+				ctx, cancel := context.WithTimeout(context.Background(), c.config.RequestTimeout)
+				//nolint:errcheck
+				pb.NewDataServiceClient(conn).LeaveGroup(ctx, &pb.LeaveGroupRequest{
+					GroupId:  c.config.GroupID,
+					MemberId: c.memberID,
+				})
+				cancel()
+			}
+		}
+	}
+	return c.pool.Close()
+}
 
 // fetchPartition sends one Fetch RPC for tp and returns decoded records.
 // On success, advances fetchOffsets[tp] to resp.NextOffset.
@@ -489,4 +532,66 @@ func protoToTP(protos []*pb.TopicPartition) []TP {
 		out[i] = TP{Topic: p.Topic, PartitionID: p.PartitionId}
 	}
 	return out
+}
+
+// heartbeatLoop sends periodic Heartbeat RPCs until ctx is cancelled.
+// It runs synchronously (not in a separate goroutine) so that rebalancing is
+// cleared before Poll resumes — callers must not call rebalance() concurrently.
+func (c *Consumer) heartbeatLoop(ctx context.Context) {
+	ticker := time.NewTicker(time.Duration(c.config.HeartbeatIntervalMs) * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			conn, err := c.pool.Get(c.coordAddr)
+			if err != nil {
+				continue
+			}
+			callCtx, cancel := context.WithTimeout(ctx, c.config.RequestTimeout)
+			resp, err := pb.NewDataServiceClient(conn).Heartbeat(callCtx, &pb.HeartbeatRequest{
+				GroupId:      c.config.GroupID,
+				MemberId:     c.memberID,
+				GenerationId: c.generationID,
+			})
+			cancel()
+			if err != nil {
+				bunnyErr, notLeader := extractErr(err)
+				if bunnyErr == nil {
+					continue
+				}
+				switch bunnyErr.Code {
+				case pb.BunnyErrorCode_NOT_LEADER:
+					if notLeader != nil && notLeader.LeaderAddress != "" {
+						c.coordAddr = notLeader.LeaderAddress
+					} else {
+						_ = c.findCoordinator(ctx)
+					}
+				case pb.BunnyErrorCode_NOT_GROUP_MEMBER:
+					c.rebalancing.Store(true)
+					c.rebalance(ctx)
+				case pb.BunnyErrorCode_UNAVAILABLE:
+					// transient; retry on next tick
+				}
+				continue
+			}
+			if resp.Status == pb.HeartbeatStatus_HEARTBEAT_REBALANCE_REQUIRED {
+				c.rebalancing.Store(true)
+				c.rebalance(ctx)
+			}
+		}
+	}
+}
+
+// rebalance re-issues JoinGroup and re-seeks committed offsets for the new assignment.
+// It must be called synchronously from heartbeatLoop so that rebalancing is cleared
+// before Poll resumes.
+func (c *Consumer) rebalance(ctx context.Context) {
+	// Clear old fetch state so Poll doesn't fetch from stale partitions.
+	c.soughtPartitions = nil
+	c.fetchOffsets = make(map[TP]int64)
+
+	_ = c.joinGroup(ctx, c.subscribedTopics)
+	c.rebalancing.Store(false)
 }
