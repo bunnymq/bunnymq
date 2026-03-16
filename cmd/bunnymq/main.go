@@ -16,6 +16,7 @@ import (
 	"github.com/bunnymq/bunnymq/internal/config"
 	clustercoord "github.com/bunnymq/bunnymq/internal/coordinator/cluster"
 	datacoord "github.com/bunnymq/bunnymq/internal/coordinator/data"
+	groupcoord "github.com/bunnymq/bunnymq/internal/coordinator/group"
 	"github.com/bunnymq/bunnymq/internal/metadata"
 	"github.com/bunnymq/bunnymq/internal/partition"
 	"github.com/bunnymq/bunnymq/internal/raft"
@@ -137,6 +138,32 @@ func run(cfg *config.Config, logger *zap.Logger) error {
 		return fmt.Errorf("bootstrap: %w", err)
 	}
 
+	gc := groupcoord.NewGroupCoordinator(groupcoord.GroupCoordinatorConfig{
+		MetadataShardID: 0,
+		ThisNodeID:      cfg.NodeID,
+	}, bh)
+	gc.RebuildHeartbeatTable()
+	gc.Start(ctx)
+
+	isMetadataLeader := func() (bool, string) {
+		leaderID, _, valid, leaderErr := bh.GetLeaderID(0)
+		if leaderErr != nil || !valid {
+			return false, ""
+		}
+		if leaderID == cfg.NodeID {
+			return true, ""
+		}
+		raw, lookupErr := bh.LookupMetadata(context.Background(), metadata.MetadataQuery{
+			Type:   metadata.QueryGetNode,
+			NodeID: leaderID,
+		})
+		if lookupErr != nil || raw == nil {
+			return false, ""
+		}
+		nodeInfo := raw.(*metadata.NodeInfo)
+		return false, nodeInfo.Address
+	}
+
 	mgmtAddr := cfg.ManagementAddr
 	if mgmtAddr == "" {
 		mgmtAddr = ":9091"
@@ -157,7 +184,7 @@ func run(cfg *config.Config, logger *zap.Logger) error {
 	}
 
 	mgmtSrv := api.NewManagementServer(api.ServerConfig{Addr: mgmtAddr, AuthTokens: cfg.AuthTokens}, cc, logger.Named("mgmt-api"))
-	dataSrv := api.NewDataServer(api.ServerConfig{Addr: dataAddr, AuthTokens: cfg.AuthTokens}, dc, logger.Named("data-api"))
+	dataSrv := api.NewDataServer(api.ServerConfig{Addr: dataAddr, AuthTokens: cfg.AuthTokens}, dc, gc, isMetadataLeader, logger.Named("data-api"))
 
 	go mgmtSrv.Serve(mgmtLn)  //nolint:errcheck
 	go dataSrv.Serve(dataLn)  //nolint:errcheck

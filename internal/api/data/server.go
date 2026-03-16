@@ -5,6 +5,8 @@ import (
 	"errors"
 
 	coorddata "github.com/bunnymq/bunnymq/internal/coordinator/data"
+	coordgroup "github.com/bunnymq/bunnymq/internal/coordinator/group"
+	"github.com/bunnymq/bunnymq/internal/metadata"
 	pb "github.com/bunnymq/bunnymq/pkg/proto/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -12,15 +14,19 @@ import (
 
 const defaultFetchMaxBytes = 1 * 1024 * 1024 // 1 MiB
 
-// Server implements pb.DataServiceServer by delegating to DataCoordinatorIface.
+// Server implements pb.DataServiceServer by delegating to DataCoordinatorIface
+// and GroupCoordinatorIface.
 type Server struct {
 	pb.UnimplementedDataServiceServer
-	dc DataCoordinatorIface
+	dc               DataCoordinatorIface
+	groupCoord       GroupCoordinatorIface
+	isMetadataLeader func() (bool, string)
 }
 
-// New returns a Server backed by the given coordinator.
-func New(dc DataCoordinatorIface) *Server {
-	return &Server{dc: dc}
+// New returns a Server backed by the given coordinators.
+// gc and isMetadataLeader may be nil when consumer group RPCs are not used.
+func New(dc DataCoordinatorIface, gc GroupCoordinatorIface, isMetadataLeader func() (bool, string)) *Server {
+	return &Server{dc: dc, groupCoord: gc, isMetadataLeader: isMetadataLeader}
 }
 
 func (s *Server) Produce(ctx context.Context, req *pb.ProduceRequest) (*pb.ProduceResponse, error) {
@@ -80,26 +86,116 @@ func (s *Server) GetOffsets(ctx context.Context, req *pb.GetOffsetsRequest) (*pb
 	return &pb.GetOffsetsResponse{Offset: offset}, nil
 }
 
-// Consumer-group RPCs are stubbed for M3; full implementations land in M4.
-
-func (s *Server) JoinGroup(_ context.Context, _ *pb.JoinGroupRequest) (*pb.JoinGroupResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented in M3")
+func (s *Server) JoinGroup(ctx context.Context, req *pb.JoinGroupRequest) (*pb.JoinGroupResponse, error) {
+	if isLeader, leaderAddr := s.isMetadataLeader(); !isLeader {
+		return nil, notLeaderStatus(leaderAddr)
+	}
+	resp, err := s.groupCoord.JoinGroup(ctx, coordgroup.JoinGroupRequest{
+		GroupID:  req.GetGroupId(),
+		MemberID: req.GetMemberId(),
+		Topics:   req.GetSubscribedTopics(),
+	})
+	if err != nil {
+		return nil, mapGroupError(err)
+	}
+	assignments := make([]*pb.TopicPartition, len(resp.Assignments))
+	for i, tp := range resp.Assignments {
+		assignments[i] = &pb.TopicPartition{Topic: tp.Topic, PartitionId: tp.PartitionID}
+	}
+	return &pb.JoinGroupResponse{
+		MemberId:     resp.MemberID,
+		GenerationId: resp.GenerationID,
+		Assignments:  assignments,
+	}, nil
 }
 
-func (s *Server) Heartbeat(_ context.Context, _ *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented in M3")
+func (s *Server) Heartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	if isLeader, leaderAddr := s.isMetadataLeader(); !isLeader {
+		return nil, notLeaderStatus(leaderAddr)
+	}
+	rebalanceRequired, err := s.groupCoord.Heartbeat(ctx, req.GetGroupId(), req.GetMemberId(), req.GetGenerationId())
+	if err != nil {
+		return nil, mapGroupError(err)
+	}
+	hbStatus := pb.HeartbeatStatus_HEARTBEAT_OK
+	if rebalanceRequired {
+		hbStatus = pb.HeartbeatStatus_HEARTBEAT_REBALANCE_REQUIRED
+	}
+	return &pb.HeartbeatResponse{Status: hbStatus}, nil
 }
 
-func (s *Server) LeaveGroup(_ context.Context, _ *pb.LeaveGroupRequest) (*pb.LeaveGroupResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented in M3")
+func (s *Server) LeaveGroup(ctx context.Context, req *pb.LeaveGroupRequest) (*pb.LeaveGroupResponse, error) {
+	if isLeader, leaderAddr := s.isMetadataLeader(); !isLeader {
+		return nil, notLeaderStatus(leaderAddr)
+	}
+	if err := s.groupCoord.LeaveGroup(ctx, coordgroup.LeaveGroupRequest{
+		GroupID:  req.GetGroupId(),
+		MemberID: req.GetMemberId(),
+	}); err != nil {
+		return nil, mapGroupError(err)
+	}
+	return &pb.LeaveGroupResponse{}, nil
 }
 
-func (s *Server) CommitOffset(_ context.Context, _ *pb.CommitOffsetRequest) (*pb.CommitOffsetResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented in M3")
+func (s *Server) CommitOffset(ctx context.Context, req *pb.CommitOffsetRequest) (*pb.CommitOffsetResponse, error) {
+	if isLeader, leaderAddr := s.isMetadataLeader(); !isLeader {
+		return nil, notLeaderStatus(leaderAddr)
+	}
+	offsets := make(map[metadata.TopicPartition]int64, len(req.GetOffsets()))
+	for _, po := range req.GetOffsets() {
+		offsets[metadata.TopicPartition{Topic: po.GetTopic(), PartitionID: po.GetPartitionId()}] = po.GetOffset()
+	}
+	if err := s.groupCoord.CommitOffset(ctx, req.GetGroupId(), req.GetMemberId(), req.GetGenerationId(), offsets); err != nil {
+		return nil, mapGroupError(err)
+	}
+	return &pb.CommitOffsetResponse{}, nil
 }
 
-func (s *Server) FetchCommittedOffsets(_ context.Context, _ *pb.FetchCommittedOffsetsRequest) (*pb.FetchCommittedOffsetsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "not implemented in M3")
+func (s *Server) FetchCommittedOffsets(ctx context.Context, req *pb.FetchCommittedOffsetsRequest) (*pb.FetchCommittedOffsetsResponse, error) {
+	if isLeader, leaderAddr := s.isMetadataLeader(); !isLeader {
+		return nil, notLeaderStatus(leaderAddr)
+	}
+	partitions := make([]metadata.TopicPartition, len(req.GetPartitions()))
+	for i, tp := range req.GetPartitions() {
+		partitions[i] = metadata.TopicPartition{Topic: tp.GetTopic(), PartitionID: tp.GetPartitionId()}
+	}
+	result, err := s.groupCoord.FetchCommittedOffsets(ctx, req.GetGroupId(), partitions)
+	if err != nil {
+		return nil, mapGroupError(err)
+	}
+	offsets := make([]*pb.PartitionOffset, 0, len(result))
+	for tp, offset := range result {
+		offsets = append(offsets, &pb.PartitionOffset{
+			Topic:       tp.Topic,
+			PartitionId: tp.PartitionID,
+			Offset:      offset,
+		})
+	}
+	return &pb.FetchCommittedOffsetsResponse{Offsets: offsets}, nil
+}
+
+func notLeaderStatus(leaderAddr string) error {
+	st, _ := status.New(codes.FailedPrecondition, "not the group coordinator").
+		WithDetails(&pb.BunnyErrorDetail{Code: pb.BunnyErrorCode_NOT_LEADER, Message: "not the group coordinator"},
+			&pb.NotLeaderDetail{LeaderAddress: leaderAddr})
+	return st.Err()
+}
+
+func mapGroupError(err error) error {
+	if errors.Is(err, ErrNotGroupMember) {
+		st, _ := status.New(codes.NotFound, err.Error()).
+			WithDetails(&pb.BunnyErrorDetail{Code: pb.BunnyErrorCode_NOT_GROUP_MEMBER, Message: err.Error()})
+		return st.Err()
+	}
+	if errors.Is(err, ErrStaleGeneration) {
+		st, _ := status.New(codes.FailedPrecondition, err.Error()).
+			WithDetails(&pb.BunnyErrorDetail{Code: pb.BunnyErrorCode_STALE_GENERATION, Message: err.Error()})
+		return st.Err()
+	}
+	if errors.Is(err, coordgroup.ErrInvalidArgument) {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	return status.Error(codes.Internal, "internal server error")
 }
 
 func mapDataError(err error) error {

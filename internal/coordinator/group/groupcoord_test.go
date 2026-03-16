@@ -14,7 +14,9 @@ import (
 
 // stubNodeHost drives an in-memory MetadataFSM, applying commands and serving lookups.
 type stubNodeHost struct {
-	fsm *metadata.MetadataFSM
+	fsm         *metadata.MetadataFSM
+	leaderID    uint64
+	leaderValid bool
 }
 
 func newStub() *stubNodeHost {
@@ -31,6 +33,10 @@ func (s *stubNodeHost) SyncProposeMetadata(_ context.Context, cmd metadata.Metad
 
 func (s *stubNodeHost) LookupMetadata(_ context.Context, q metadata.MetadataQuery) (interface{}, error) {
 	return s.fsm.Lookup(q)
+}
+
+func (s *stubNodeHost) GetLeaderID(_ uint64) (uint64, uint64, bool, error) {
+	return s.leaderID, 0, s.leaderValid, nil
 }
 
 func defaultConfig() GroupCoordinatorConfig {

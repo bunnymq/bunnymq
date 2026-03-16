@@ -30,9 +30,9 @@ func NewManagementServer(config ServerConfig, cc *cluster.ClusterCoordinator, lo
 }
 
 // NewDataServer builds a grpc.Server for the Data API.
-func NewDataServer(config ServerConfig, dc *data.DataCoordinator, logger *zap.Logger) *grpc.Server {
+func NewDataServer(config ServerConfig, dc *data.DataCoordinator, gc apidata.GroupCoordinatorIface, isMetadataLeader func() (bool, string), logger *zap.Logger) *grpc.Server {
 	srv := grpc.NewServer(serverOptions(config, logger)...)
-	proto.RegisterDataServiceServer(srv, apidata.New(dc))
+	proto.RegisterDataServiceServer(srv, apidata.New(dc, gc, isMetadataLeader))
 	return srv
 }
 
