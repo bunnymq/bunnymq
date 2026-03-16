@@ -73,6 +73,7 @@ type brokerCoord struct {
 	LeaderCheckIntervalMs  int64 `json:"leadercheckintervalms"`
 	BootstrapTimeoutMs     int64 `json:"bootstraptimeoutms"`
 	EagerReconcileOnCreate bool  `json:"eagerreconcileoncreate"`
+	GroupSweepIntervalMs   int64 `json:"groupsweepintervalms"`
 }
 
 // startBroker writes a config file and launches cmd/bunnymq as a subprocess.
@@ -102,6 +103,62 @@ func startBroker(t *testing.T, nodeID uint64, raftPort, mgmtPort, dataPort int, 
 			LeaderCheckIntervalMs:  1000,
 			BootstrapTimeoutMs:     30000,
 			EagerReconcileOnCreate: true,
+		},
+	}
+
+	cfgData, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal broker config: %v", err)
+	}
+	cfgPath := filepath.Join(dataDir, "config.json")
+	if err := os.WriteFile(cfgPath, cfgData, 0o644); err != nil {
+		t.Fatalf("write broker config: %v", err)
+	}
+
+	cmd := exec.Command(brokerBinary, cfgPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start broker node %d: %v", nodeID, err)
+	}
+
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+
+	return cmd
+}
+
+// startBrokerSweep starts a broker with a custom GroupSweepIntervalMs.
+func startBrokerSweep(t *testing.T, nodeID uint64, raftPort, mgmtPort, dataPort int, dataDir string, peers map[uint64]string, groupSweepIntervalMs int64) *exec.Cmd {
+	t.Helper()
+
+	peerMap := make(map[string]string, len(peers))
+	for id, addr := range peers {
+		peerMap[fmt.Sprintf("%d", id)] = addr
+	}
+
+	cfg := brokerCfgFile{
+		NodeID:         nodeID,
+		RaftAddress:    fmt.Sprintf("localhost:%d", raftPort),
+		ManagementAddr: fmt.Sprintf("localhost:%d", mgmtPort),
+		DataAddr:       fmt.Sprintf("localhost:%d", dataPort),
+		DataDir:        dataDir,
+		RaftRTTMs:      10,
+		Peers:          peerMap,
+		Storage: brokerStorage{
+			SegmentMaxBytes:  128 * 1024 * 1024,
+			IndexSampleBytes: 4096,
+		},
+		Coordinator: brokerCoord{
+			ReconcileIntervalMs:    500,
+			LeaderCheckIntervalMs:  1000,
+			BootstrapTimeoutMs:     30000,
+			EagerReconcileOnCreate: true,
+			GroupSweepIntervalMs:   groupSweepIntervalMs,
 		},
 	}
 
@@ -1080,5 +1137,301 @@ func TestGroup_VoluntaryLeave_TriggersRebalance(t *testing.T) {
 	if len(newRecordsSeen) < nPartitions {
 		t.Errorf("after rebalance: new batches seen on %d/%d partitions, want all %d",
 			len(newRecordsSeen), nPartitions, nPartitions)
+	}
+}
+
+// TestGroup_SessionTimeout_EvictsMember verifies that a consumer which stops
+// heartbeating is evicted after session_timeout_ms and Consumer1 acquires both
+// partitions without Consumer2 sending LeaveGroup.
+func TestGroup_SessionTimeout_EvictsMember(t *testing.T) {
+	if brokerBinary == "" {
+		t.Skip("broker binary not available; skipping cluster test")
+	}
+
+	const (
+		sessionTimeoutMs = 3000
+		sweepIntervalMs  = 5000
+		nPartitions      = 2
+		batchesPerPart   = 10
+	)
+
+	nodes := []clusterNode{
+		{1, 61093, 61091, 61092},
+		{2, 62093, 62091, 62092},
+		{3, 63093, 63091, 63092},
+	}
+	peers := clusterPeers(nodes)
+	for _, n := range nodes {
+		startBrokerSweep(t, n.id, n.raftPort, n.mgmtPort, n.dataPort, t.TempDir(), peers, sweepIntervalMs)
+	}
+
+	adminAddr := fmt.Sprintf("localhost:%d", nodes[0].mgmtPort)
+	waitClusterReady(t, adminAddr, 3, 30*time.Second)
+
+	ac, err := client.NewAdminClient(client.Config{
+		BootstrapServers: []string{adminAddr},
+		RequestTimeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new admin client: %v", err)
+	}
+	defer ac.Close() //nolint:errcheck
+
+	ctx := context.Background()
+	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+		Name:              "timeout-topic",
+		PartitionCount:    nPartitions,
+		ReplicationFactor: 3,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	waitPartitionsLeaders(t, adminAddr, "timeout-topic", nPartitions, 15*time.Second)
+
+	bootstrapAddrs := clusterBootstrapAddrs(nodes)
+	prod, err := client.NewProducer(client.ProducerConfig{
+		Config: client.Config{
+			BootstrapServers: bootstrapAddrs,
+			RequestTimeout:   10 * time.Second,
+		},
+		DefaultAcks: client.AcksAll,
+	})
+	if err != nil {
+		t.Fatalf("new producer: %v", err)
+	}
+	defer prod.Close() //nolint:errcheck
+
+	produceRoundRobin(t, ctx, prod, "timeout-topic", nPartitions, nPartitions*batchesPerPart, "timeout")
+
+	newTimeoutConsumer := func() *client.Consumer {
+		c, cerr := client.NewConsumer(client.ConsumerConfig{
+			Config: client.Config{
+				BootstrapServers: bootstrapAddrs,
+				RequestTimeout:   10 * time.Second,
+			},
+			GroupID:             "timeout-group",
+			MaxFetchBytes:       1 << 20,
+			MaxFetchWaitMs:      1000,
+			AutoOffsetReset:     client.OffsetResetEarliest,
+			HeartbeatIntervalMs: 1000,
+			SessionTimeoutMs:    sessionTimeoutMs,
+		})
+		if cerr != nil {
+			t.Fatalf("new consumer: %v", cerr)
+		}
+		return c
+	}
+
+	cons1 := newTimeoutConsumer()
+	defer cons1.Close() //nolint:errcheck
+	if err = cons1.Subscribe([]string{"timeout-topic"}); err != nil {
+		t.Fatalf("cons1.Subscribe: %v", err)
+	}
+
+	cons2 := newTimeoutConsumer()
+	if err = cons2.Subscribe([]string{"timeout-topic"}); err != nil {
+		_ = cons2.SimulateCrash
+		t.Fatalf("cons2.Subscribe: %v", err)
+	}
+
+	// Wait for the initial rebalance to settle.
+	time.Sleep(5 * time.Second)
+
+	// Simulate a crash: stop heartbeats without sending LeaveGroup.
+	cons2.SimulateCrash()
+
+	// Poll until cons1 accumulates records from all partitions.
+	// Budget covers: sessionTimeoutMs (3s) + sweepIntervalMs (5s) + heartbeat (1s) + drain + margin.
+	// Use a 5s poll context so sequential partition fetches (2 partitions × up to 1s wait each)
+	// never race against the context deadline.
+	allRecs := make(map[int32][]client.Record)
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		total := 0
+		for _, recs := range allRecs {
+			total += len(recs)
+		}
+		if total >= nPartitions*batchesPerPart && len(allRecs) >= nPartitions {
+			break
+		}
+		pollCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		recs, pollErr := cons1.Poll(pollCtx, 5000)
+		cancel()
+		if pollErr != nil {
+			t.Logf("cons1.Poll: %v", pollErr)
+			continue
+		}
+		for _, r := range recs {
+			allRecs[r.PartitionID] = append(allRecs[r.PartitionID], r)
+		}
+	}
+
+	total := 0
+	for _, recs := range allRecs {
+		total += len(recs)
+	}
+	if total < nPartitions*batchesPerPart {
+		t.Errorf("cons1 received %d total records, want >= %d (both partitions after eviction)",
+			total, nPartitions*batchesPerPart)
+	}
+	if len(allRecs) < nPartitions {
+		t.Errorf("cons1 received records from %d partitions, want %d (all partitions after eviction)",
+			len(allRecs), nPartitions)
+	}
+}
+
+// TestGroup_OffsetCommit_SurvivesRestart verifies that committed offsets persist
+// across a consumer restart so Consumer2 resumes from offset 10, not 0.
+func TestGroup_OffsetCommit_SurvivesRestart(t *testing.T) {
+	if brokerBinary == "" {
+		t.Skip("broker binary not available; skipping cluster test")
+	}
+
+	const (
+		totalBatches    = 20
+		firstHalf       = 10
+		commitOffset    = int64(10) // next-to-read after consuming offsets 0–9
+	)
+
+	nodes := []clusterNode{
+		{1, 64093, 64091, 64092},
+		{2, 65093, 65091, 65092},
+		{3, 63193, 63191, 63192},
+	}
+	peers := clusterPeers(nodes)
+	for _, n := range nodes {
+		startBroker(t, n.id, n.raftPort, n.mgmtPort, n.dataPort, t.TempDir(), peers)
+	}
+
+	adminAddr := fmt.Sprintf("localhost:%d", nodes[0].mgmtPort)
+	waitClusterReady(t, adminAddr, 3, 30*time.Second)
+
+	ac, err := client.NewAdminClient(client.Config{
+		BootstrapServers: []string{adminAddr},
+		RequestTimeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new admin client: %v", err)
+	}
+	defer ac.Close() //nolint:errcheck
+
+	ctx := context.Background()
+	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+		Name:              "offset-topic",
+		PartitionCount:    1,
+		ReplicationFactor: 3,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	waitPartitionsLeaders(t, adminAddr, "offset-topic", 1, 15*time.Second)
+
+	bootstrapAddrs := clusterBootstrapAddrs(nodes)
+	prod, err := client.NewProducer(client.ProducerConfig{
+		Config: client.Config{
+			BootstrapServers: bootstrapAddrs,
+			RequestTimeout:   10 * time.Second,
+		},
+		DefaultAcks: client.AcksAll,
+	})
+	if err != nil {
+		t.Fatalf("new producer: %v", err)
+	}
+	defer prod.Close() //nolint:errcheck
+
+	for b := 0; b < totalBatches; b++ {
+		sendOneBatch(t, ctx, prod, "offset-topic", 0, b, "offset-batch", 15*time.Second)
+	}
+
+	newOffsetConsumer := func() *client.Consumer {
+		c, cerr := client.NewConsumer(client.ConsumerConfig{
+			Config: client.Config{
+				BootstrapServers: bootstrapAddrs,
+				RequestTimeout:   10 * time.Second,
+			},
+			GroupID:             "offset-group",
+			MaxFetchBytes:       1 << 20,
+			MaxFetchWaitMs:      1000,
+			AutoOffsetReset:     client.OffsetResetEarliest,
+			HeartbeatIntervalMs: 1000,
+		})
+		if cerr != nil {
+			t.Fatalf("new consumer: %v", cerr)
+		}
+		return c
+	}
+
+	// Consumer1: join, poll first 10 records, commit offset 10, then close.
+	cons1 := newOffsetConsumer()
+	if err = cons1.Subscribe([]string{"offset-topic"}); err != nil {
+		_ = cons1.Close()
+		t.Fatalf("cons1.Subscribe: %v", err)
+	}
+
+	received1 := make([]client.Record, 0, firstHalf)
+	deadline1 := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline1) && len(received1) < firstHalf {
+		pollCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		recs, pollErr := cons1.Poll(pollCtx, 3000)
+		cancel()
+		if pollErr != nil {
+			t.Fatalf("cons1.Poll: %v", pollErr)
+		}
+		received1 = append(received1, recs...)
+	}
+	if len(received1) < firstHalf {
+		_ = cons1.Close()
+		t.Fatalf("cons1 received %d records, want >= %d", len(received1), firstHalf)
+	}
+
+	commitCtx, commitCancel := context.WithTimeout(ctx, 10*time.Second)
+	if err = cons1.CommitOffsets(commitCtx, map[client.TP]int64{
+		{Topic: "offset-topic", PartitionID: 0}: commitOffset,
+	}); err != nil {
+		commitCancel()
+		_ = cons1.Close()
+		t.Fatalf("CommitOffsets: %v", err)
+	}
+	commitCancel()
+
+	if err = cons1.Close(); err != nil {
+		t.Logf("cons1.Close: %v", err)
+	}
+
+	// Consumer2: same group, re-joins and must start at committed offset 10.
+	cons2 := newOffsetConsumer()
+	defer cons2.Close() //nolint:errcheck
+	if err = cons2.Subscribe([]string{"offset-topic"}); err != nil {
+		t.Fatalf("cons2.Subscribe: %v", err)
+	}
+
+	received2 := make([]client.Record, 0, totalBatches-firstHalf)
+	deadline2 := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline2) && len(received2) < totalBatches-firstHalf {
+		pollCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		recs, pollErr := cons2.Poll(pollCtx, 3000)
+		cancel()
+		if pollErr != nil {
+			t.Fatalf("cons2.Poll: %v", pollErr)
+		}
+		received2 = append(received2, recs...)
+	}
+
+	if len(received2) < totalBatches-firstHalf {
+		t.Errorf("cons2 received %d records, want >= %d", len(received2), totalBatches-firstHalf)
+	}
+
+	for _, r := range received2 {
+		if r.Offset < commitOffset {
+			t.Errorf("cons2 re-delivered offset %d (< committed offset %d)", r.Offset, commitOffset)
+		}
+	}
+
+	lowestOffset := int64(-1)
+	for _, r := range received2 {
+		if lowestOffset < 0 || r.Offset < lowestOffset {
+			lowestOffset = r.Offset
+		}
+	}
+	if lowestOffset >= 0 && lowestOffset != commitOffset {
+		t.Errorf("cons2 first offset: got %d, want %d", lowestOffset, commitOffset)
 	}
 }

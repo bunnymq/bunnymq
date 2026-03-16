@@ -66,10 +66,12 @@ message GetOffsetsResponse {
 }
 
 message JoinGroupRequest {
-  string          group_id          = 1;
-  string          member_id         = 2;
-  repeated string subscribed_topics = 3;
-  string          client_host       = 4;
+  string          group_id              = 1;
+  string          member_id             = 2;
+  repeated string subscribed_topics     = 3;
+  string          client_host           = 4;
+  int32           session_timeout_ms    = 5;
+  int32           heartbeat_interval_ms = 6;
 }
 
 message JoinGroupResponse {

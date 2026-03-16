@@ -141,6 +141,7 @@ func run(cfg *config.Config, logger *zap.Logger) error {
 	gc := groupcoord.NewGroupCoordinator(groupcoord.GroupCoordinatorConfig{
 		MetadataShardID: 0,
 		ThisNodeID:      cfg.NodeID,
+		SweepIntervalMs: cfg.Coordinator.GroupSweepIntervalMs,
 	}, bh)
 	gc.RebuildHeartbeatTable()
 	gc.Start(ctx)

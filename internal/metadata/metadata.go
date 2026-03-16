@@ -287,7 +287,8 @@ func (fsm *MetadataFSM) applyGroupStateLeave(cmd *LeaveConsumerGroupCmd) sm.Resu
 	}
 	group.GenerationID++
 	if len(group.Members) == 0 {
-		delete(fsm.state.GroupStates, cmd.GroupID)
+		// Keep the group entry so committed offsets survive the last member leaving.
+		group.Assignments = make(map[string][]TopicPartition)
 	}
 	return OKResult()
 }
