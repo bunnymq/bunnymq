@@ -2,10 +2,11 @@ package client
 
 import "errors"
 
-// Sentinel errors returned by AdminClient methods.
+// Sentinel errors returned by client methods.
 var (
 	ErrTopicAlreadyExists = errors.New("client: topic already exists")
 	ErrTopicNotFound      = errors.New("client: topic not found")
+	ErrStaleGeneration    = errors.New("client: stale generation — consumer must rejoin the group")
 )
 
 // CreateTopicRequest is the input to AdminClient.CreateTopic.

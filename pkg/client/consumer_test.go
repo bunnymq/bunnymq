@@ -10,6 +10,8 @@ import (
 	"github.com/bunnymq/bunnymq/internal/storage"
 	pb "github.com/bunnymq/bunnymq/pkg/proto/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ---- consumer-specific fake helpers ----
@@ -228,6 +230,444 @@ func TestConsumer_Poll_NotLeader_SkipsPartition(t *testing.T) {
 	}
 	if meta.Leaders[0] != newLeaderAddr {
 		t.Errorf("leader cache: got %q, want %q", meta.Leaders[0], newLeaderAddr)
+	}
+}
+
+// ---- group mode test helpers ----
+
+type groupConsumerTestServer struct {
+	grpc    *grpc.Server
+	addr    string
+	mgmtSvc *fakeMgmtSvc
+	dataSvc *fakeGroupDataSvc
+}
+
+type joinGroupResult struct {
+	resp *pb.JoinGroupResponse
+	err  error
+}
+
+type fetchOffsetsResult struct {
+	offsets []*pb.PartitionOffset
+	err     error
+}
+
+type commitOffsetResult struct {
+	err error
+}
+
+type fakeGroupDataSvc struct {
+	pb.UnimplementedDataServiceServer
+	mu               sync.Mutex
+	joinResults      []joinGroupResult
+	joinCalls        []*pb.JoinGroupRequest
+	commitResults    []commitOffsetResult
+	commitCalls      []*pb.CommitOffsetRequest
+	fetchOffsResults []fetchOffsetsResult
+	fetchOfsCalls    []*pb.FetchCommittedOffsetsRequest
+	getOffsetResult  int64
+	getOffsetCalls   int
+}
+
+func (f *fakeGroupDataSvc) JoinGroup(_ context.Context, req *pb.JoinGroupRequest) (*pb.JoinGroupResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.joinCalls = append(f.joinCalls, req)
+	if len(f.joinResults) == 0 {
+		return &pb.JoinGroupResponse{}, nil
+	}
+	r := f.joinResults[0]
+	f.joinResults = f.joinResults[1:]
+	return r.resp, r.err
+}
+
+func (f *fakeGroupDataSvc) FetchCommittedOffsets(_ context.Context, req *pb.FetchCommittedOffsetsRequest) (*pb.FetchCommittedOffsetsResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fetchOfsCalls = append(f.fetchOfsCalls, req)
+	if len(f.fetchOffsResults) == 0 {
+		return &pb.FetchCommittedOffsetsResponse{}, nil
+	}
+	r := f.fetchOffsResults[0]
+	f.fetchOffsResults = f.fetchOffsResults[1:]
+	return &pb.FetchCommittedOffsetsResponse{Offsets: r.offsets}, r.err
+}
+
+func (f *fakeGroupDataSvc) CommitOffset(_ context.Context, req *pb.CommitOffsetRequest) (*pb.CommitOffsetResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commitCalls = append(f.commitCalls, req)
+	if len(f.commitResults) == 0 {
+		return &pb.CommitOffsetResponse{}, nil
+	}
+	r := f.commitResults[0]
+	f.commitResults = f.commitResults[1:]
+	return &pb.CommitOffsetResponse{}, r.err
+}
+
+func (f *fakeGroupDataSvc) GetOffsets(_ context.Context, _ *pb.GetOffsetsRequest) (*pb.GetOffsetsResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.getOffsetCalls++
+	return &pb.GetOffsetsResponse{Offset: f.getOffsetResult}, nil
+}
+
+func newGroupConsumerTestServer(t *testing.T) *groupConsumerTestServer {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	s := grpc.NewServer()
+	ts := &groupConsumerTestServer{
+		grpc:    s,
+		addr:    lis.Addr().String(),
+		mgmtSvc: &fakeMgmtSvc{},
+		dataSvc: &fakeGroupDataSvc{},
+	}
+	pb.RegisterManagementServiceServer(s, ts.mgmtSvc)
+	pb.RegisterDataServiceServer(s, ts.dataSvc)
+	go s.Serve(lis) //nolint:errcheck
+	t.Cleanup(s.Stop)
+	return ts
+}
+
+// setGroupCoordMeta configures the management service so that findCoordinator
+// resolves ts.addr as the coordinator.
+func setGroupCoordMeta(ts *groupConsumerTestServer) {
+	ts.mgmtSvc.mu.Lock()
+	ts.mgmtSvc.clusterResp = &pb.DescribeClusterResponse{
+		Nodes: []*pb.NodeInfo{{NodeId: 1, Address: ts.addr}},
+	}
+	ts.mgmtSvc.mu.Unlock()
+}
+
+// setGroupTopicMeta sets topic metadata so that getPartitionOffset can resolve
+// the leader for the given single-partition topic to ts.addr.
+func setGroupTopicMeta(ts *groupConsumerTestServer, topic string) {
+	ts.mgmtSvc.mu.Lock()
+	ts.mgmtSvc.topicResp = &pb.DescribeTopicResponse{
+		Topic:      &pb.TopicInfo{Name: topic, PartitionCount: 1},
+		Partitions: []*pb.PartitionInfo{{PartitionId: 0, LeaderNodeId: 1}},
+	}
+	ts.mgmtSvc.mu.Unlock()
+}
+
+func newGroupConsumerForTest(t *testing.T, bootstrapAddr, groupID string, policy OffsetResetPolicy) *Consumer {
+	t.Helper()
+	c, err := NewConsumer(ConsumerConfig{
+		Config: Config{
+			BootstrapServers: []string{bootstrapAddr},
+			RequestTimeout:   2 * time.Second,
+		},
+		GroupID:         groupID,
+		MaxFetchBytes:   1 << 20,
+		MaxFetchWaitMs:  100,
+		AutoOffsetReset: policy,
+	})
+	if err != nil {
+		t.Fatalf("NewConsumer: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+func staleGenerationErr() error {
+	st, _ := status.New(codes.FailedPrecondition, "stale generation").WithDetails(
+		&pb.BunnyErrorDetail{Code: pb.BunnyErrorCode_STALE_GENERATION},
+	)
+	return st.Err()
+}
+
+// ---- group mode consumer tests ----
+
+func TestConsumer_GroupMode_Subscribe_CallsJoinGroup(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+	setGroupCoordMeta(ts)
+
+	ts.dataSvc.mu.Lock()
+	ts.dataSvc.joinResults = []joinGroupResult{{
+		resp: &pb.JoinGroupResponse{
+			MemberId:     "m1",
+			GenerationId: 7,
+			Assignments: []*pb.TopicPartition{
+				{Topic: "t", PartitionId: 0},
+				{Topic: "t", PartitionId: 1},
+			},
+		},
+	}}
+	ts.dataSvc.mu.Unlock()
+
+	c := newGroupConsumerForTest(t, ts.addr, "grp1", OffsetResetEarliest)
+	if err := c.Subscribe([]string{"t"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	if c.memberID != "m1" {
+		t.Errorf("memberID = %q, want m1", c.memberID)
+	}
+	if c.generationID != 7 {
+		t.Errorf("generationID = %d, want 7", c.generationID)
+	}
+	if len(c.soughtPartitions) != 2 {
+		t.Errorf("soughtPartitions len = %d, want 2", len(c.soughtPartitions))
+	}
+
+	ts.dataSvc.mu.Lock()
+	calls := ts.dataSvc.joinCalls
+	ts.dataSvc.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("JoinGroup call count = %d, want 1", len(calls))
+	}
+	if calls[0].GroupId != "grp1" {
+		t.Errorf("JoinGroup GroupId = %q, want grp1", calls[0].GroupId)
+	}
+}
+
+func TestConsumer_GroupMode_InitFetchOffsets_Committed(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+	setGroupCoordMeta(ts)
+
+	ts.dataSvc.mu.Lock()
+	ts.dataSvc.joinResults = []joinGroupResult{{
+		resp: &pb.JoinGroupResponse{
+			MemberId:     "m1",
+			GenerationId: 1,
+			Assignments:  []*pb.TopicPartition{{Topic: "tp", PartitionId: 0}},
+		},
+	}}
+	ts.dataSvc.fetchOffsResults = []fetchOffsetsResult{{
+		offsets: []*pb.PartitionOffset{{Topic: "tp", PartitionId: 0, Offset: 10}},
+	}}
+	ts.dataSvc.mu.Unlock()
+
+	c := newGroupConsumerForTest(t, ts.addr, "grp1", OffsetResetEarliest)
+	if err := c.Subscribe([]string{"tp"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	tp := TP{Topic: "tp", PartitionID: 0}
+	if c.fetchOffsets[tp] != 10 {
+		t.Errorf("fetchOffsets = %d, want 10", c.fetchOffsets[tp])
+	}
+}
+
+func TestConsumer_GroupMode_InitFetchOffsets_Earliest(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+	setGroupCoordMeta(ts)
+
+	ts.dataSvc.mu.Lock()
+	ts.dataSvc.joinResults = []joinGroupResult{{
+		resp: &pb.JoinGroupResponse{
+			MemberId:     "m1",
+			GenerationId: 1,
+			Assignments:  []*pb.TopicPartition{{Topic: "tp", PartitionId: 0}},
+		},
+	}}
+	// FetchCommittedOffsets returns -1 (offset absent).
+	ts.dataSvc.fetchOffsResults = []fetchOffsetsResult{{
+		offsets: []*pb.PartitionOffset{{Topic: "tp", PartitionId: 0, Offset: -1}},
+	}}
+	ts.dataSvc.mu.Unlock()
+
+	c := newGroupConsumerForTest(t, ts.addr, "grp1", OffsetResetEarliest)
+	if err := c.Subscribe([]string{"tp"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	tp := TP{Topic: "tp", PartitionID: 0}
+	if c.fetchOffsets[tp] != 0 {
+		t.Errorf("fetchOffsets = %d, want 0", c.fetchOffsets[tp])
+	}
+}
+
+func TestConsumer_GroupMode_InitFetchOffsets_Latest(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+	setGroupCoordMeta(ts)
+	setGroupTopicMeta(ts, "tp") // needed for getPartitionOffset → leaderFor
+
+	ts.dataSvc.mu.Lock()
+	ts.dataSvc.joinResults = []joinGroupResult{{
+		resp: &pb.JoinGroupResponse{
+			MemberId:     "m1",
+			GenerationId: 1,
+			Assignments:  []*pb.TopicPartition{{Topic: "tp", PartitionId: 0}},
+		},
+	}}
+	// FetchCommittedOffsets returns -1 so AutoOffsetReset=LATEST applies.
+	ts.dataSvc.fetchOffsResults = []fetchOffsetsResult{{
+		offsets: []*pb.PartitionOffset{{Topic: "tp", PartitionId: 0, Offset: -1}},
+	}}
+	ts.dataSvc.getOffsetResult = 42
+	ts.dataSvc.mu.Unlock()
+
+	c := newGroupConsumerForTest(t, ts.addr, "grp1", OffsetResetLatest)
+	if err := c.Subscribe([]string{"tp"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	tp := TP{Topic: "tp", PartitionID: 0}
+	if c.fetchOffsets[tp] != 42 {
+		t.Errorf("fetchOffsets = %d, want 42", c.fetchOffsets[tp])
+	}
+
+	ts.dataSvc.mu.Lock()
+	calls := ts.dataSvc.getOffsetCalls
+	ts.dataSvc.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("GetOffsets calls = %d, want 1", calls)
+	}
+}
+
+func TestConsumer_GroupMode_CommitOffsets_Success(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+	setGroupCoordMeta(ts)
+
+	ts.dataSvc.mu.Lock()
+	ts.dataSvc.joinResults = []joinGroupResult{{
+		resp: &pb.JoinGroupResponse{
+			MemberId:     "m1",
+			GenerationId: 3,
+			Assignments:  []*pb.TopicPartition{{Topic: "tp", PartitionId: 0}},
+		},
+	}}
+	ts.dataSvc.mu.Unlock()
+
+	c := newGroupConsumerForTest(t, ts.addr, "grp1", OffsetResetEarliest)
+	if err := c.Subscribe([]string{"tp"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	err := c.CommitOffsets(context.Background(), map[TP]int64{
+		{Topic: "tp", PartitionID: 0}: 5,
+	})
+	if err != nil {
+		t.Errorf("CommitOffsets returned unexpected error: %v", err)
+	}
+
+	ts.dataSvc.mu.Lock()
+	calls := ts.dataSvc.commitCalls
+	ts.dataSvc.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("CommitOffset call count = %d, want 1", len(calls))
+	}
+	if calls[0].GenerationId != 3 {
+		t.Errorf("CommitOffset GenerationId = %d, want 3", calls[0].GenerationId)
+	}
+}
+
+func TestConsumer_GroupMode_CommitOffsets_StaleGeneration(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+	setGroupCoordMeta(ts)
+
+	ts.dataSvc.mu.Lock()
+	ts.dataSvc.joinResults = []joinGroupResult{{
+		resp: &pb.JoinGroupResponse{
+			MemberId:     "m1",
+			GenerationId: 1,
+			Assignments:  []*pb.TopicPartition{{Topic: "tp", PartitionId: 0}},
+		},
+	}}
+	ts.dataSvc.commitResults = []commitOffsetResult{{err: staleGenerationErr()}}
+	ts.dataSvc.mu.Unlock()
+
+	c := newGroupConsumerForTest(t, ts.addr, "grp1", OffsetResetEarliest)
+	if err := c.Subscribe([]string{"tp"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	err := c.CommitOffsets(context.Background(), map[TP]int64{
+		{Topic: "tp", PartitionID: 0}: 5,
+	})
+	if err != ErrStaleGeneration {
+		t.Errorf("CommitOffsets error = %v, want ErrStaleGeneration", err)
+	}
+}
+
+func TestConsumer_GroupMode_Subscribe_NotLeader_Retry(t *testing.T) {
+	// serverA: returns NOT_LEADER on first JoinGroup; DescribeCluster returns its own address.
+	serverA := newGroupConsumerTestServer(t)
+	serverA.mgmtSvc.mu.Lock()
+	serverA.mgmtSvc.clusterResp = &pb.DescribeClusterResponse{
+		Nodes: []*pb.NodeInfo{{NodeId: 1, Address: serverA.addr}},
+	}
+	serverA.mgmtSvc.mu.Unlock()
+
+	// serverB: returns success on JoinGroup; handles FetchCommittedOffsets.
+	serverB := newGroupConsumerTestServer(t)
+	serverB.dataSvc.mu.Lock()
+	serverB.dataSvc.joinResults = []joinGroupResult{{
+		resp: &pb.JoinGroupResponse{
+			MemberId:     "m-b",
+			GenerationId: 2,
+			Assignments:  []*pb.TopicPartition{{Topic: "t", PartitionId: 0}},
+		},
+	}}
+	serverB.dataSvc.mu.Unlock()
+
+	// serverA's JoinGroup returns NOT_LEADER pointing at serverB.
+	serverA.dataSvc.mu.Lock()
+	serverA.dataSvc.joinResults = []joinGroupResult{{
+		err: notLeaderErr(serverB.addr),
+	}}
+	serverA.dataSvc.mu.Unlock()
+
+	c := newGroupConsumerForTest(t, serverA.addr, "grp1", OffsetResetEarliest)
+	if err := c.Subscribe([]string{"t"}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	if c.memberID != "m-b" {
+		t.Errorf("memberID = %q, want m-b", c.memberID)
+	}
+	if c.coordAddr != serverB.addr {
+		t.Errorf("coordAddr = %q, want %q", c.coordAddr, serverB.addr)
+	}
+
+	// Verify JoinGroup was called on both servers.
+	serverA.dataSvc.mu.Lock()
+	callsA := len(serverA.dataSvc.joinCalls)
+	serverA.dataSvc.mu.Unlock()
+	serverB.dataSvc.mu.Lock()
+	callsB := len(serverB.dataSvc.joinCalls)
+	serverB.dataSvc.mu.Unlock()
+	if callsA != 1 {
+		t.Errorf("serverA JoinGroup calls = %d, want 1", callsA)
+	}
+	if callsB != 1 {
+		t.Errorf("serverB JoinGroup calls = %d, want 1", callsB)
+	}
+}
+
+func TestConsumer_ManualMode_CommitOffsets_Noop(t *testing.T) {
+	ts := newGroupConsumerTestServer(t)
+
+	c, err := NewConsumer(ConsumerConfig{
+		Config: Config{
+			BootstrapServers: []string{ts.addr},
+			RequestTimeout:   2 * time.Second,
+		},
+		MaxFetchBytes:  1 << 20,
+		MaxFetchWaitMs: 100,
+		// GroupID is empty → manual mode
+	})
+	if err != nil {
+		t.Fatalf("NewConsumer: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	err = c.CommitOffsets(context.Background(), map[TP]int64{
+		{Topic: "t", PartitionID: 0}: 5,
+	})
+	if err != nil {
+		t.Errorf("CommitOffsets (manual mode) returned error: %v", err)
+	}
+
+	ts.dataSvc.mu.Lock()
+	calls := ts.dataSvc.commitCalls
+	ts.dataSvc.mu.Unlock()
+	if len(calls) != 0 {
+		t.Errorf("CommitOffset was called %d times, want 0", len(calls))
 	}
 }
 
