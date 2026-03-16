@@ -18,6 +18,7 @@ var (
 	ErrNotGroupMember  = errors.New("not a group member")
 	ErrNotFound        = errors.New("not found")
 	ErrInvalidArgument = errors.New("invalid argument")
+	ErrStaleGeneration = errors.New("stale generation")
 )
 
 // GroupCoordinatorConfig holds configuration for a GroupCoordinator.
@@ -257,6 +258,64 @@ func (gc *GroupCoordinator) LeaveGroup(ctx context.Context, req LeaveGroupReques
 	gc.heartbeatMu.Unlock()
 
 	return nil
+}
+
+// CommitOffset validates membership and generation then durably stores offsets via Raft.
+func (gc *GroupCoordinator) CommitOffset(ctx context.Context, groupID, memberID string, generationID int32, offsets map[metadata.TopicPartition]int64) error {
+	raw, err := gc.nh.LookupMetadata(ctx, metadata.MetadataQuery{
+		Type:    metadata.QueryGetGroupState,
+		GroupID: groupID,
+	})
+	if err != nil {
+		return fmt.Errorf("lookup group: %w", err)
+	}
+	if raw == nil {
+		return ErrNotGroupMember
+	}
+	group := raw.(*metadata.GroupState)
+
+	if _, ok := group.Members[memberID]; !ok {
+		return ErrNotGroupMember
+	}
+	if generationID != group.GenerationID {
+		return fmt.Errorf("%w: client generation %d, current %d", ErrStaleGeneration, generationID, group.GenerationID)
+	}
+
+	assigned := make(map[metadata.TopicPartition]struct{}, len(group.Assignments[memberID]))
+	for _, tp := range group.Assignments[memberID] {
+		assigned[tp] = struct{}{}
+	}
+	for tp := range offsets {
+		if _, ok := assigned[tp]; !ok {
+			return fmt.Errorf("%w: partition %v not assigned to member %q", ErrInvalidArgument, tp, memberID)
+		}
+	}
+
+	if _, err = gc.nh.SyncProposeMetadata(ctx, metadata.MetadataCommand{
+		Type: metadata.CmdCommitConsumerOffset,
+		CommitConsumerOffset: &metadata.CommitConsumerOffsetCmd{
+			GroupID:      groupID,
+			GroupOffsets: offsets,
+		},
+	}); err != nil {
+		return fmt.Errorf("propose commit offset: %w", err)
+	}
+	return nil
+}
+
+// FetchCommittedOffsets returns the stored committed offsets for the requested partitions.
+// Missing entries return -1; no membership check is performed (monitoring-friendly).
+func (gc *GroupCoordinator) FetchCommittedOffsets(ctx context.Context, groupID string, partitions []metadata.TopicPartition) (map[metadata.TopicPartition]int64, error) {
+	raw, err := gc.nh.LookupMetadata(ctx, metadata.MetadataQuery{
+		Type:       metadata.QueryGetGroupOffsets,
+		GroupID:    groupID,
+		Partitions: partitions,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("lookup group offsets: %w", err)
+	}
+	result, _ := raw.(map[metadata.TopicPartition]int64)
+	return result, nil
 }
 
 // topicSetsEqual reports whether two topic slices contain the same elements (order-independent).

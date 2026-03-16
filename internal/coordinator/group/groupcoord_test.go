@@ -190,6 +190,185 @@ func TestGroupCoordinator_LeaveGroup_NotMember(t *testing.T) {
 	}
 }
 
+func TestCommitOffset_Success(t *testing.T) {
+	stub := newStub()
+	seedTopic(t, stub, "topic-a", 4)
+	gc := NewGroupCoordinator(defaultConfig(), stub)
+
+	resp, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"}))
+	if err != nil {
+		t.Fatalf("JoinGroup: %v", err)
+	}
+
+	committed := make(map[metadata.TopicPartition]int64)
+	for _, tp := range resp.Assignments {
+		committed[tp] = 10
+	}
+
+	if err = gc.CommitOffset(context.Background(), "g1", "m1", resp.GenerationID, committed); err != nil {
+		t.Fatalf("CommitOffset: %v", err)
+	}
+
+	partitions := make([]metadata.TopicPartition, 0, len(committed))
+	for tp := range committed {
+		partitions = append(partitions, tp)
+	}
+	got, err := gc.FetchCommittedOffsets(context.Background(), "g1", partitions)
+	if err != nil {
+		t.Fatalf("FetchCommittedOffsets: %v", err)
+	}
+	for tp, want := range committed {
+		if got[tp] != want {
+			t.Fatalf("offset for %v: got %d, want %d", tp, got[tp], want)
+		}
+	}
+}
+
+func TestCommitOffset_StaleGeneration(t *testing.T) {
+	stub := newStub()
+	seedTopic(t, stub, "topic-a", 2)
+	gc := NewGroupCoordinator(defaultConfig(), stub)
+
+	resp, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"}))
+	if err != nil {
+		t.Fatalf("JoinGroup: %v", err)
+	}
+
+	offsets := make(map[metadata.TopicPartition]int64)
+	for _, tp := range resp.Assignments {
+		offsets[tp] = 1
+	}
+
+	err = gc.CommitOffset(context.Background(), "g1", "m1", resp.GenerationID-1, offsets)
+	if err == nil {
+		t.Fatal("expected error for stale generation")
+	}
+	if !errors.Is(err, ErrStaleGeneration) {
+		t.Fatalf("expected ErrStaleGeneration, got %v", err)
+	}
+}
+
+func TestCommitOffset_NotMember(t *testing.T) {
+	stub := newStub()
+	seedTopic(t, stub, "topic-a", 2)
+	gc := NewGroupCoordinator(defaultConfig(), stub)
+
+	if _, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"})); err != nil {
+		t.Fatalf("JoinGroup: %v", err)
+	}
+
+	err := gc.CommitOffset(context.Background(), "g1", "unknown-member", 1, map[metadata.TopicPartition]int64{})
+	if err == nil {
+		t.Fatal("expected error for unknown member")
+	}
+	if !errors.Is(err, ErrNotGroupMember) {
+		t.Fatalf("expected ErrNotGroupMember, got %v", err)
+	}
+}
+
+func TestCommitOffset_UnassignedPartition(t *testing.T) {
+	stub := newStub()
+	seedTopic(t, stub, "topic-a", 4)
+	gc := NewGroupCoordinator(defaultConfig(), stub)
+
+	resp, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"}))
+	if err != nil {
+		t.Fatalf("JoinGroup: %v", err)
+	}
+
+	// Partition 99 is not assigned to m1.
+	offsets := map[metadata.TopicPartition]int64{
+		{Topic: "topic-a", PartitionID: 99}: 1,
+	}
+	err = gc.CommitOffset(context.Background(), "g1", "m1", resp.GenerationID, offsets)
+	if err == nil {
+		t.Fatal("expected error for unassigned partition")
+	}
+	if !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("expected ErrInvalidArgument, got %v", err)
+	}
+}
+
+func TestCommitOffset_Idempotent(t *testing.T) {
+	stub := newStub()
+	seedTopic(t, stub, "topic-a", 2)
+	gc := NewGroupCoordinator(defaultConfig(), stub)
+
+	resp, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"}))
+	if err != nil {
+		t.Fatalf("JoinGroup: %v", err)
+	}
+
+	committed := make(map[metadata.TopicPartition]int64)
+	for _, tp := range resp.Assignments {
+		committed[tp] = 42
+	}
+
+	for i := 0; i < 2; i++ {
+		if err = gc.CommitOffset(context.Background(), "g1", "m1", resp.GenerationID, committed); err != nil {
+			t.Fatalf("CommitOffset attempt %d: %v", i+1, err)
+		}
+	}
+
+	partitions := make([]metadata.TopicPartition, 0, len(committed))
+	for tp := range committed {
+		partitions = append(partitions, tp)
+	}
+	got, err := gc.FetchCommittedOffsets(context.Background(), "g1", partitions)
+	if err != nil {
+		t.Fatalf("FetchCommittedOffsets: %v", err)
+	}
+	for tp := range committed {
+		if got[tp] != 42 {
+			t.Fatalf("offset for %v after idempotent commit: got %d, want 42", tp, got[tp])
+		}
+	}
+}
+
+func TestFetchCommittedOffsets_ReturnsCommitted(t *testing.T) {
+	stub := newStub()
+	seedTopic(t, stub, "topic-a", 4)
+	gc := NewGroupCoordinator(defaultConfig(), stub)
+
+	resp, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"}))
+	if err != nil {
+		t.Fatalf("JoinGroup: %v", err)
+	}
+
+	tp0 := resp.Assignments[0]
+	offsets := map[metadata.TopicPartition]int64{tp0: 42}
+	if err = gc.CommitOffset(context.Background(), "g1", "m1", resp.GenerationID, offsets); err != nil {
+		t.Fatalf("CommitOffset: %v", err)
+	}
+
+	got, err := gc.FetchCommittedOffsets(context.Background(), "g1", []metadata.TopicPartition{tp0})
+	if err != nil {
+		t.Fatalf("FetchCommittedOffsets: %v", err)
+	}
+	if got[tp0] != 42 {
+		t.Fatalf("expected offset 42 for %v, got %d", tp0, got[tp0])
+	}
+}
+
+func TestFetchCommittedOffsets_MissingReturnsNegativeOne(t *testing.T) {
+	stub := newStub()
+	seedTopic(t, stub, "topic-a", 2)
+	gc := NewGroupCoordinator(defaultConfig(), stub)
+
+	if _, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"})); err != nil {
+		t.Fatalf("JoinGroup: %v", err)
+	}
+
+	tp := metadata.TopicPartition{Topic: "topic-a", PartitionID: 0}
+	got, err := gc.FetchCommittedOffsets(context.Background(), "g1", []metadata.TopicPartition{tp})
+	if err != nil {
+		t.Fatalf("FetchCommittedOffsets: %v", err)
+	}
+	if got[tp] != -1 {
+		t.Fatalf("expected -1 for uncommitted partition, got %d", got[tp])
+	}
+}
+
 func TestGroupCoordinator_LeaveGroup_RemovesFromHeartbeat(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 2)
