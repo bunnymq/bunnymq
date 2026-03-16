@@ -12,7 +12,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const defaultFetchMaxBytes = 1 * 1024 * 1024 // 1 MiB
+const (
+	defaultFetchMaxBytes        = 1 * 1024 * 1024 // 1 MiB
+	defaultSessionTimeoutMs     = 30000            // 30 s — used when proto does not carry session_timeout_ms
+	defaultHeartbeatIntervalMs  = 3000             // 3 s
+)
 
 // Server implements pb.DataServiceServer by delegating to DataCoordinatorIface
 // and GroupCoordinatorIface.
@@ -91,9 +95,11 @@ func (s *Server) JoinGroup(ctx context.Context, req *pb.JoinGroupRequest) (*pb.J
 		return nil, notLeaderStatus(leaderAddr)
 	}
 	resp, err := s.groupCoord.JoinGroup(ctx, coordgroup.JoinGroupRequest{
-		GroupID:  req.GetGroupId(),
-		MemberID: req.GetMemberId(),
-		Topics:   req.GetSubscribedTopics(),
+		GroupID:             req.GetGroupId(),
+		MemberID:            req.GetMemberId(),
+		Topics:              req.GetSubscribedTopics(),
+		SessionTimeoutMs:    defaultSessionTimeoutMs,
+		HeartbeatIntervalMs: defaultHeartbeatIntervalMs,
 	})
 	if err != nil {
 		return nil, mapGroupError(err)
