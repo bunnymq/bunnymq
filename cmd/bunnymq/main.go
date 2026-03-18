@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"go.uber.org/zap"
@@ -23,12 +24,17 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: bunnymq <config-file>")
-		os.Exit(1)
+	if len(os.Args) > 1 && os.Args[1] == "--health-check" {
+		healthCheck()
 	}
 
-	cfg, err := config.Load(os.Args[1])
+	var cfg *config.Config
+	var err error
+	if len(os.Args) >= 2 && os.Args[1] != "--health-check" {
+		cfg, err = config.Load(os.Args[1])
+	} else {
+		cfg, err = config.LoadFromEnv()
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		os.Exit(1)
@@ -44,6 +50,21 @@ func main() {
 	if err := run(cfg, logger); err != nil {
 		logger.Fatal("broker exited with error", zap.Error(err))
 	}
+}
+
+// healthCheck dials the management port and exits 0 if reachable, 1 otherwise.
+func healthCheck() {
+	addr := os.Getenv("MGMT_ADDR")
+	if addr == "" {
+		addr = ":9091"
+	}
+	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "health check failed: %v\n", err)
+		os.Exit(1)
+	}
+	conn.Close() //nolint:errcheck
+	os.Exit(0)
 }
 
 // brokerHost wraps raft.Host and pre-wires a partition factory so that
