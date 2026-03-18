@@ -13,20 +13,20 @@ import (
 )
 
 // recoverStorage enumerates .log files in dir, opens sealed segments read-only,
-// and recovers the active segment via CRC scan. Returns the segment list and
-// nextOffset derived from the log.
-func recoverStorage(dir string, cfg *config.StorageConfig) ([]*SegmentStorage, int64, error) {
+// and recovers the active segment via CRC scan. Returns the segment list,
+// nextOffset derived from the log, and the number of CRC errors found.
+func recoverStorage(dir string, cfg *config.StorageConfig) ([]*SegmentStorage, int64, int, error) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.log"))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	if len(matches) == 0 {
 		seg, err := NewSegmentStorage(dir, 0, cfg)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
-		return []*SegmentStorage{seg}, 0, nil
+		return []*SegmentStorage{seg}, 0, 0, nil
 	}
 
 	sort.Strings(matches)
@@ -38,11 +38,11 @@ func recoverStorage(dir string, cfg *config.StorageConfig) ([]*SegmentStorage, i
 		base := filepath.Base(path)
 		offset, err := strconv.ParseInt(base[:len(base)-4], 10, 64)
 		if err != nil {
-			return nil, 0, fmt.Errorf("invalid segment filename %s: %w", path, err)
+			return nil, 0, 0, fmt.Errorf("invalid segment filename %s: %w", path, err)
 		}
 		seg, err := OpenSegmentStorage(dir, offset, cfg, true)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
 		segments = append(segments, seg)
 	}
@@ -52,17 +52,17 @@ func recoverStorage(dir string, cfg *config.StorageConfig) ([]*SegmentStorage, i
 	base := filepath.Base(activePath)
 	activeOffset, err := strconv.ParseInt(base[:len(base)-4], 10, 64)
 	if err != nil {
-		return nil, 0, fmt.Errorf("invalid segment filename %s: %w", activePath, err)
+		return nil, 0, 0, fmt.Errorf("invalid segment filename %s: %w", activePath, err)
 	}
 
-	validPos, nextOffset, err := scanActiveLog(activePath, activeOffset)
+	validPos, nextOffset, crcErrors, err := scanActiveLog(activePath, activeOffset)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	// Truncate the log to the last valid byte if needed.
 	if err := os.Truncate(activePath, validPos); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	// Rebuild indexes from scratch (crash may have left them inconsistent).
@@ -72,12 +72,12 @@ func recoverStorage(dir string, cfg *config.StorageConfig) ([]*SegmentStorage, i
 
 	offsetIdx, err := OpenOffsetIndex(basePath+".index", activeOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	timeIdx, err := OpenTimeIndex(basePath+".timeindex", activeOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes)
 	if err != nil {
 		_ = offsetIdx.Close()
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	// Open active log for appending (stat reflects truncated size).
@@ -85,7 +85,7 @@ func recoverStorage(dir string, cfg *config.StorageConfig) ([]*SegmentStorage, i
 	if err != nil {
 		_ = offsetIdx.Close()
 		_ = timeIdx.Close()
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	// Populate indexes by scanning the valid portion.
@@ -121,21 +121,22 @@ func recoverStorage(dir string, cfg *config.StorageConfig) ([]*SegmentStorage, i
 	}
 
 	segments = append(segments, activeSeg)
-	return segments, nextOffset, nil
+	return segments, nextOffset, crcErrors, nil
 }
 
 // scanActiveLog scans logPath from byte 0 with CRC-32C verification. Returns
-// validPos (first invalid byte) and nextOffset derived from valid batches.
-func scanActiveLog(logPath string, baseOffset int64) (validPos int64, nextOffset int64, err error) {
+// validPos (first invalid byte), nextOffset derived from valid batches, and the
+// number of CRC errors encountered.
+func scanActiveLog(logPath string, baseOffset int64) (validPos int64, nextOffset int64, crcErrors int, err error) {
 	f, err := os.Open(logPath)
 	if err != nil {
-		return 0, baseOffset, err
+		return 0, baseOffset, 0, err
 	}
 	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
-		return 0, baseOffset, err
+		return 0, baseOffset, 0, err
 	}
 	fileSize := info.Size()
 
@@ -162,6 +163,7 @@ func scanActiveLog(logPath string, baseOffset int64) (validPos int64, nextOffset
 
 		storedCRC := binary.BigEndian.Uint32(hdr[16:20])
 		if crc32.Checksum(records, crcTable) != storedCRC {
+			crcErrors++
 			break
 		}
 
@@ -171,7 +173,7 @@ func scanActiveLog(logPath string, baseOffset int64) (validPos int64, nextOffset
 		pos += int64(batchLen)
 	}
 
-	return pos, currOffset, nil
+	return pos, currOffset, crcErrors, nil
 }
 
 // rebuildSegmentIndexes closes and recreates the index files for seg, then

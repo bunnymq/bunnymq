@@ -67,15 +67,30 @@ type Storage interface {
 	Close() error
 }
 
+// OpenOption configures a storageImpl during Open.
+type OpenOption func(*storageImpl)
+
+// WithMetrics wires a StorageMetrics instance and partition labels into the storage.
+func WithMetrics(m *StorageMetrics, topic, partitionID string) OpenOption {
+	return func(s *storageImpl) {
+		s.metrics = m
+		s.topic = topic
+		s.partitionID = partitionID
+	}
+}
+
 type storageImpl struct {
-	dir        string
-	segments   []*SegmentStorage
-	nextOffset int64
-	segMu      sync.RWMutex
-	newDataCh  chan struct{}
-	chanMu     sync.Mutex
-	config     *config.StorageConfig
-	retCancel  context.CancelFunc
+	dir         string
+	topic       string
+	partitionID string
+	metrics     *StorageMetrics
+	segments    []*SegmentStorage
+	nextOffset  int64
+	segMu       sync.RWMutex
+	newDataCh   chan struct{}
+	chanMu      sync.Mutex
+	config      *config.StorageConfig
+	retCancel   context.CancelFunc
 	retentionMs    atomic.Int64
 	retentionBytes atomic.Int64
 	closed         bool
@@ -85,22 +100,36 @@ type storageImpl struct {
 var _ Storage = (*storageImpl)(nil)
 
 // Open enumerates and recovers segments in dir, starts the retention goroutine,
-// and returns a ready Storage.
-func Open(dir string, cfg *config.StorageConfig) (*storageImpl, error) {
-	segments, nextOffset, err := recoverStorage(dir, cfg)
+// and returns a ready Storage. Optional OpenOption values (e.g. WithMetrics) may
+// be passed to attach metrics and partition labels without changing existing callers.
+func Open(dir string, cfg *config.StorageConfig, opts ...OpenOption) (*storageImpl, error) {
+	s := &storageImpl{
+		dir:       dir,
+		newDataCh: make(chan struct{}),
+		config:    cfg,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	recoveryStart := time.Now()
+	segments, nextOffset, crcErrors, err := recoverStorage(dir, cfg)
 	if err != nil {
 		return nil, err
 	}
+	recoveryDur := time.Since(recoveryStart)
+
+	s.segments = segments
+	s.nextOffset = nextOffset
+
+	var earliestOff int64
+	if len(segments) > 0 {
+		earliestOff = segments[0].BaseOffset()
+	}
+	s.metrics.recordRecovery(s.topic, s.partitionID, recoveryDur, len(segments), earliestOff, nextOffset, crcErrors)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &storageImpl{
-		dir:        dir,
-		segments:   segments,
-		nextOffset: nextOffset,
-		newDataCh:  make(chan struct{}),
-		config:     cfg,
-		retCancel:  cancel,
-	}
+	s.retCancel = cancel
 	s.retentionMs.Store(cfg.DefaultRetentionMs)
 	s.retentionBytes.Store(cfg.DefaultRetentionBytes)
 
@@ -137,6 +166,7 @@ func (s *storageImpl) Append(batch []byte) (int64, error) {
 		return 0, ErrStorageClosed
 	}
 
+	start := time.Now()
 	s.segMu.Lock()
 	baseOffset := s.nextOffset
 	binary.BigEndian.PutUint64(batch[0:8], uint64(baseOffset))
@@ -146,13 +176,25 @@ func (s *storageImpl) Append(batch []byte) (int64, error) {
 	}
 	recordCount := int64(binary.BigEndian.Uint32(batch[12:16]))
 	s.nextOffset += recordCount
+	rolled := false
 	if s.active().LogSize() >= s.config.SegmentMaxBytes {
 		if err := s.roll(); err != nil {
 			s.segMu.Unlock()
 			return 0, err
 		}
+		rolled = true
 	}
+	activeBytes := s.active().LogSize()
+	segCount := len(s.segments)
+	latestOff := s.nextOffset
 	s.segMu.Unlock()
+
+	dur := time.Since(start)
+	s.metrics.recordAppend(s.topic, s.partitionID, len(batch), dur)
+	s.metrics.recordAppendGauges(s.topic, s.partitionID, latestOff, activeBytes)
+	if rolled {
+		s.metrics.recordRoll(s.topic, s.partitionID, segCount)
+	}
 
 	s.chanMu.Lock()
 	old := s.newDataCh
@@ -164,6 +206,9 @@ func (s *storageImpl) Append(batch []byte) (int64, error) {
 }
 
 func (s *storageImpl) Read(offset int64, maxBytes int) ([]byte, int64, error) {
+	start := time.Now()
+	defer func() { s.metrics.recordRead(s.topic, s.partitionID, time.Since(start)) }()
+
 	s.segMu.RLock()
 	segs := make([]*SegmentStorage, len(s.segments))
 	copy(segs, s.segments)
