@@ -22,7 +22,8 @@ func (s *storageImpl) EnforceRetention(retentionMs int64, retentionBytes int64) 
 	}
 
 	sealedSegs := segs[:len(segs)-1]
-	toDelete := make([]bool, len(sealedSegs))
+	// reasons[i] is "" (not deleted), "bytes", or "time".
+	reasons := make([]string, len(sealedSegs))
 
 	// Bytes retention: mark oldest sealed segments until remaining total <=
 	// retentionBytes. retentionBytes < 0 means unlimited.
@@ -32,7 +33,7 @@ func (s *storageImpl) EnforceRetention(retentionMs int64, retentionBytes int64) 
 			total += seg.LogSize()
 		}
 		for i := 0; i < len(sealedSegs) && total > retentionBytes; i++ {
-			toDelete[i] = true
+			reasons[i] = "bytes"
 			total -= sealedSegs[i].LogSize()
 		}
 	}
@@ -42,20 +43,23 @@ func (s *storageImpl) EnforceRetention(retentionMs int64, retentionBytes int64) 
 	if retentionMs > 0 {
 		nowMs := time.Now().UnixMilli()
 		for i := range sealedSegs {
+			if reasons[i] != "" {
+				continue
+			}
 			nextSeg := segs[i+1]
 			ts, err := s.firstBatchTimestamp(nextSeg)
 			if err != nil {
 				continue
 			}
 			if ts < nowMs-retentionMs {
-				toDelete[i] = true
+				reasons[i] = "time"
 			}
 		}
 	}
 
 	deleted := 0
-	for i, del := range toDelete {
-		if !del {
+	for i, reason := range reasons {
+		if reason == "" {
 			continue
 		}
 		seg := sealedSegs[i]
@@ -74,7 +78,18 @@ func (s *storageImpl) EnforceRetention(retentionMs int64, retentionBytes int64) 
 		_ = os.Remove(base + ".log")
 		_ = os.Remove(base + ".index")
 		_ = os.Remove(base + ".timeindex")
+		s.metrics.recordRetentionDeletion(s.topic, s.partitionID, reason)
 		deleted++
+	}
+
+	if deleted > 0 {
+		s.segMu.RLock()
+		var earliest int64
+		if len(s.segments) > 0 {
+			earliest = s.segments[0].BaseOffset()
+		}
+		s.segMu.RUnlock()
+		s.metrics.recordEarliestOffset(s.topic, s.partitionID, earliest)
 	}
 
 	return deleted, nil
