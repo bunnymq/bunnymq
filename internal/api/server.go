@@ -26,14 +26,14 @@ type ServerConfig struct {
 // NewManagementServer builds a grpc.Server for the Management API.
 func NewManagementServer(config ServerConfig, cc *cluster.ClusterCoordinator, logger *zap.Logger) *grpc.Server {
 	srv := grpc.NewServer(serverOptions(config, logger)...)
-	proto.RegisterManagementServiceServer(srv, apimgmt.New(cc))
+	proto.RegisterManagementServiceServer(srv, apimgmt.NewServer(cc, logger))
 	return srv
 }
 
 // NewDataServer builds a grpc.Server for the Data API.
 func NewDataServer(config ServerConfig, dc *data.DataCoordinator, gc apidata.GroupCoordinatorIface, isMetadataLeader func() (bool, string), logger *zap.Logger) *grpc.Server {
 	srv := grpc.NewServer(serverOptions(config, logger)...)
-	proto.RegisterDataServiceServer(srv, apidata.New(dc, gc, isMetadataLeader))
+	proto.RegisterDataServiceServer(srv, apidata.NewServer(dc, gc, isMetadataLeader, logger))
 	return srv
 }
 

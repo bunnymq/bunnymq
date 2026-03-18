@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"go.uber.org/zap"
+
 	"github.com/bunnymq/bunnymq/internal/config"
 	"golang.org/x/sys/unix"
 )
@@ -27,8 +29,8 @@ func segmentBasePath(dir string, baseOffset int64) string {
 }
 
 // NewSegmentStorage creates new .log, .index, and .timeindex files for an
-// active segment with the given base offset.
-func NewSegmentStorage(dir string, baseOffset int64, cfg *config.StorageConfig) (*SegmentStorage, error) {
+// active segment with the given base offset. logger receives fallocate-fallback warns.
+func NewSegmentStorage(dir string, baseOffset int64, cfg *config.StorageConfig, logger *zap.Logger) (*SegmentStorage, error) {
 	base := segmentBasePath(dir, baseOffset)
 
 	log, err := OpenLogSegment(base+".log", baseOffset, true)
@@ -36,13 +38,13 @@ func NewSegmentStorage(dir string, baseOffset int64, cfg *config.StorageConfig) 
 		return nil, err
 	}
 
-	offsetIdx, err := OpenOffsetIndex(base+".index", baseOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes)
+	offsetIdx, err := OpenOffsetIndex(base+".index", baseOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes, logger)
 	if err != nil {
 		_ = log.Close()
 		return nil, err
 	}
 
-	timeIdx, err := OpenTimeIndex(base+".timeindex", baseOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes)
+	timeIdx, err := OpenTimeIndex(base+".timeindex", baseOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes, logger)
 	if err != nil {
 		_ = log.Close()
 		_ = offsetIdx.Close()
@@ -61,7 +63,8 @@ func NewSegmentStorage(dir string, baseOffset int64, cfg *config.StorageConfig) 
 // OpenSegmentStorage opens existing segment files. readonly=true opens for a
 // sealed segment (PROT_READ index mmap, O_RDONLY log). readonly=false opens
 // for an active segment (pre-allocated index mmap, O_RDWR log).
-func OpenSegmentStorage(dir string, baseOffset int64, cfg *config.StorageConfig, readonly bool) (*SegmentStorage, error) {
+// logger receives fallocate-fallback warns on non-readonly open.
+func OpenSegmentStorage(dir string, baseOffset int64, cfg *config.StorageConfig, readonly bool, logger *zap.Logger) (*SegmentStorage, error) {
 	base := segmentBasePath(dir, baseOffset)
 
 	log, err := OpenLogSegment(base+".log", baseOffset, !readonly)
@@ -85,12 +88,12 @@ func OpenSegmentStorage(dir string, baseOffset int64, cfg *config.StorageConfig,
 			return nil, err
 		}
 	} else {
-		offsetIdx, err = OpenOffsetIndex(base+".index", baseOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes)
+		offsetIdx, err = OpenOffsetIndex(base+".index", baseOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes, logger)
 		if err != nil {
 			_ = log.Close()
 			return nil, err
 		}
-		timeIdx, err = OpenTimeIndex(base+".timeindex", baseOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes)
+		timeIdx, err = OpenTimeIndex(base+".timeindex", baseOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes, logger)
 		if err != nil {
 			_ = log.Close()
 			_ = offsetIdx.Close()

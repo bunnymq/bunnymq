@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"go.uber.org/zap"
+
 	coorddata "github.com/bunnymq/bunnymq/internal/coordinator/data"
 	coordgroup "github.com/bunnymq/bunnymq/internal/coordinator/group"
 	"github.com/bunnymq/bunnymq/internal/metadata"
@@ -25,12 +27,16 @@ type Server struct {
 	dc               DataCoordinatorIface
 	groupCoord       GroupCoordinatorIface
 	isMetadataLeader func() (bool, string)
+	logger           *zap.Logger
 }
 
-// New returns a Server backed by the given coordinators.
+// NewServer returns a Server backed by the given coordinators.
 // gc and isMetadataLeader may be nil when consumer group RPCs are not used.
-func New(dc DataCoordinatorIface, gc GroupCoordinatorIface, isMetadataLeader func() (bool, string)) *Server {
-	return &Server{dc: dc, groupCoord: gc, isMetadataLeader: isMetadataLeader}
+func NewServer(dc DataCoordinatorIface, gc GroupCoordinatorIface, isMetadataLeader func() (bool, string), logger *zap.Logger) *Server {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &Server{dc: dc, groupCoord: gc, isMetadataLeader: isMetadataLeader, logger: logger}
 }
 
 func (s *Server) Produce(ctx context.Context, req *pb.ProduceRequest) (*pb.ProduceResponse, error) {

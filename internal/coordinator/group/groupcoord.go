@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	sm "github.com/lni/dragonboat/v4/statemachine"
+	"go.uber.org/zap"
 
 	"github.com/bunnymq/bunnymq/internal/metadata"
 )
@@ -73,12 +74,13 @@ type GroupCoordinatorIface interface {
 type GroupCoordinator struct {
 	config        GroupCoordinatorConfig
 	nh            nodeHostIface
+	logger        *zap.Logger
 	heartbeatMu   sync.RWMutex
 	lastHeartbeat map[string]map[string]time.Time // group → member → last heartbeat time
 }
 
 // NewGroupCoordinator creates a new GroupCoordinator.
-func NewGroupCoordinator(config GroupCoordinatorConfig, nh nodeHostIface) *GroupCoordinator {
+func NewGroupCoordinator(config GroupCoordinatorConfig, nh nodeHostIface, logger *zap.Logger) *GroupCoordinator {
 	if config.SessionTimeoutMinMs == 0 {
 		config.SessionTimeoutMinMs = 1000
 	}
@@ -88,9 +90,13 @@ func NewGroupCoordinator(config GroupCoordinatorConfig, nh nodeHostIface) *Group
 	if config.SweepIntervalMs == 0 {
 		config.SweepIntervalMs = 5000
 	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &GroupCoordinator{
 		config:        config,
 		nh:            nh,
+		logger:        logger,
 		lastHeartbeat: make(map[string]map[string]time.Time),
 	}
 }

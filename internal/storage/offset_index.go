@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync/atomic"
 
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
 
@@ -30,7 +31,8 @@ type OffsetIndexSegment struct {
 // OpenOffsetIndex creates or opens a .index file at path. The file is
 // pre-allocated to ceil(segMaxBytes/indexSampleBytes)*8 bytes rounded up to
 // the OS page size, then mmap'd PROT_READ|PROT_WRITE|MAP_SHARED.
-func OpenOffsetIndex(path string, baseOffset int64, segMaxBytes int64, indexSampleBytes int) (*OffsetIndexSegment, error) {
+// logger receives a warn when fallocate is unavailable and truncate is used instead.
+func OpenOffsetIndex(path string, baseOffset int64, segMaxBytes int64, indexSampleBytes int, logger *zap.Logger) (*OffsetIndexSegment, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return nil, err
@@ -49,9 +51,13 @@ func OpenOffsetIndex(path string, baseOffset int64, segMaxBytes int64, indexSamp
 	allocSize := (entryBytes + pageSize - 1) / pageSize * pageSize
 
 	if existingSize < allocSize {
-		if err := preallocateIndex(f, allocSize); err != nil {
+		fallback, err := preallocateIndex(f, allocSize)
+		if err != nil {
 			_ = f.Close()
 			return nil, err
+		}
+		if fallback {
+			logger.Warn("fallocate not supported; fell back to write")
 		}
 	}
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
+	"go.uber.org/zap"
 
 	"github.com/bunnymq/bunnymq/internal/metadata"
 )
@@ -84,7 +85,7 @@ func joinReq(groupID, memberID string, topics []string) JoinGroupRequest {
 func TestGroupCoordinator_JoinGroup_NewMemberID(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 2)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	resp, err := gc.JoinGroup(context.Background(), joinReq("g1", "", []string{"topic-a"}))
 	if err != nil {
@@ -98,7 +99,7 @@ func TestGroupCoordinator_JoinGroup_NewMemberID(t *testing.T) {
 func TestGroupCoordinator_JoinGroup_ReusesMemberID(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 2)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	const want = "my-member-id"
 	resp, err := gc.JoinGroup(context.Background(), joinReq("g1", want, []string{"topic-a"}))
@@ -112,7 +113,7 @@ func TestGroupCoordinator_JoinGroup_ReusesMemberID(t *testing.T) {
 
 func TestGroupCoordinator_JoinGroup_UnknownTopic(t *testing.T) {
 	stub := newStub()
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	_, err := gc.JoinGroup(context.Background(), joinReq("g1", "", []string{"does-not-exist"}))
 	if err == nil {
@@ -127,7 +128,7 @@ func TestGroupCoordinator_JoinGroup_MixedSubscriptions(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 2)
 	seedTopic(t, stub, "topic-b", 2)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	if _, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"})); err != nil {
 		t.Fatalf("first JoinGroup: %v", err)
@@ -145,7 +146,7 @@ func TestGroupCoordinator_JoinGroup_MixedSubscriptions(t *testing.T) {
 func TestGroupCoordinator_JoinGroup_GenerationIncrements(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 4)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	resp1, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"}))
 	if err != nil {
@@ -167,7 +168,7 @@ func TestGroupCoordinator_JoinGroup_GenerationIncrements(t *testing.T) {
 func TestGroupCoordinator_JoinGroup_AssignmentCoverage(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 4)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	if _, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"})); err != nil {
 		t.Fatalf("first JoinGroup: %v", err)
@@ -185,7 +186,7 @@ func TestGroupCoordinator_JoinGroup_AssignmentCoverage(t *testing.T) {
 func TestGroupCoordinator_LeaveGroup_NotMember(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 2)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	err := gc.LeaveGroup(context.Background(), LeaveGroupRequest{GroupID: "g1", MemberID: "nobody"})
 	if err == nil {
@@ -199,7 +200,7 @@ func TestGroupCoordinator_LeaveGroup_NotMember(t *testing.T) {
 func TestCommitOffset_Success(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 4)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	resp, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"}))
 	if err != nil {
@@ -233,7 +234,7 @@ func TestCommitOffset_Success(t *testing.T) {
 func TestCommitOffset_StaleGeneration(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 2)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	resp, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"}))
 	if err != nil {
@@ -257,7 +258,7 @@ func TestCommitOffset_StaleGeneration(t *testing.T) {
 func TestCommitOffset_NotMember(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 2)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	if _, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"})); err != nil {
 		t.Fatalf("JoinGroup: %v", err)
@@ -275,7 +276,7 @@ func TestCommitOffset_NotMember(t *testing.T) {
 func TestCommitOffset_UnassignedPartition(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 4)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	resp, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"}))
 	if err != nil {
@@ -298,7 +299,7 @@ func TestCommitOffset_UnassignedPartition(t *testing.T) {
 func TestCommitOffset_Idempotent(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 2)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	resp, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"}))
 	if err != nil {
@@ -334,7 +335,7 @@ func TestCommitOffset_Idempotent(t *testing.T) {
 func TestFetchCommittedOffsets_ReturnsCommitted(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 4)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	resp, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"}))
 	if err != nil {
@@ -359,7 +360,7 @@ func TestFetchCommittedOffsets_ReturnsCommitted(t *testing.T) {
 func TestFetchCommittedOffsets_MissingReturnsNegativeOne(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 2)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	if _, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"})); err != nil {
 		t.Fatalf("JoinGroup: %v", err)
@@ -378,7 +379,7 @@ func TestFetchCommittedOffsets_MissingReturnsNegativeOne(t *testing.T) {
 func TestGroupCoordinator_LeaveGroup_RemovesFromHeartbeat(t *testing.T) {
 	stub := newStub()
 	seedTopic(t, stub, "topic-a", 2)
-	gc := NewGroupCoordinator(defaultConfig(), stub)
+	gc := NewGroupCoordinator(defaultConfig(), stub, zap.NewNop())
 
 	if _, err := gc.JoinGroup(context.Background(), joinReq("g1", "m1", []string{"topic-a"})); err != nil {
 		t.Fatalf("JoinGroup: %v", err)

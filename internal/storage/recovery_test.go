@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func TestRecovery_CleanShutdown(t *testing.T) {
@@ -178,7 +180,7 @@ func TestRecovery_MultipleSegments(t *testing.T) {
 	cfg := storageTestConfig(128*1024*1024, 4096)
 
 	// Sealed segment 0: batches at base_offsets 0, 1, 2.
-	seg0, err := NewSegmentStorage(dir, 0, cfg)
+	seg0, err := NewSegmentStorage(dir, 0, cfg, zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewSegmentStorage 0: %v", err)
 	}
@@ -194,7 +196,7 @@ func TestRecovery_MultipleSegments(t *testing.T) {
 	_ = seg0.Close()
 
 	// Sealed segment 1: batches at base_offsets 3, 4, 5.
-	seg1, err := NewSegmentStorage(dir, 3, cfg)
+	seg1, err := NewSegmentStorage(dir, 3, cfg, zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewSegmentStorage 3: %v", err)
 	}
@@ -210,7 +212,7 @@ func TestRecovery_MultipleSegments(t *testing.T) {
 	_ = seg1.Close()
 
 	// Active segment 2: one clean batch at base_offset 6.
-	seg2, err := NewSegmentStorage(dir, 6, cfg)
+	seg2, err := NewSegmentStorage(dir, 6, cfg, zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewSegmentStorage 6: %v", err)
 	}

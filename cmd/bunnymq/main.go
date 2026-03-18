@@ -15,8 +15,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/bunnymq/bunnymq/internal/api"
+	"github.com/bunnymq/bunnymq/internal/observability"
 	cmetrics "github.com/bunnymq/bunnymq/internal/cluster"
 	"github.com/bunnymq/bunnymq/internal/config"
 	clustercoord "github.com/bunnymq/bunnymq/internal/coordinator/cluster"
@@ -48,16 +50,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger, err := zap.NewProduction()
+	logger, err := observability.NewLogger(zapcore.InfoLevel, false)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init logger: %v\n", err)
 		os.Exit(1)
 	}
 	defer logger.Sync() //nolint:errcheck
 
+	logger.Info("bunnymq starting", zap.Uint64("node_id", cfg.NodeID), zap.String("version", version))
 	if err := run(cfg, logger); err != nil {
 		logger.Fatal("broker exited with error", zap.Error(err))
 	}
+	logger.Info("bunnymq stopped")
 }
 
 // healthCheck dials the management port and exits 0 if reachable, 1 otherwise.
@@ -214,7 +218,7 @@ func run(cfg *config.Config, logger *zap.Logger) error {
 		MetadataShardID: 0,
 		ThisNodeID:      cfg.NodeID,
 		SweepIntervalMs: cfg.Coordinator.GroupSweepIntervalMs,
-	}, bh)
+	}, bh, logger.Named("group"))
 	gc.RebuildHeartbeatTable()
 	gc.Start(ctx)
 

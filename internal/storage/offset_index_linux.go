@@ -3,18 +3,20 @@
 package storage
 
 import (
-	"log"
 	"os"
 
 	"golang.org/x/sys/unix"
 )
 
-func preallocateIndex(f *os.File, size int64) error {
+// preallocateIndex pre-allocates the index file to size bytes using fallocate.
+// Returns (true, nil) when fallocate is unsupported and the caller fell back to
+// truncate only (caller should log a warn); returns (false, nil) on success.
+func preallocateIndex(f *os.File, size int64) (bool, error) {
 	if err := f.Truncate(size); err != nil {
-		return err
+		return false, err
 	}
 	if err := unix.Fallocate(int(f.Fd()), unix.FALLOC_FL_KEEP_SIZE, 0, size); err != nil {
-		log.Printf("[WARN] storage: fallocate failed (%v); index file blocks may not be pre-allocated", err)
+		return true, nil
 	}
-	return nil
+	return false, nil
 }

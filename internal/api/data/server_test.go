@@ -59,11 +59,11 @@ func validBatch(t *testing.T) []byte {
 
 func TestDataServer_Produce_ValidBatch(t *testing.T) {
 	batch := validBatch(t)
-	srv := New(&stubDataCoordinator{
+	srv := NewServer(&stubDataCoordinator{
 		produceFn: func(_ context.Context, _ string, _ int32, _ []byte, _ coorddata.AcksMode) (int64, error) {
 			return 42, nil
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	resp, err := srv.Produce(context.Background(), &pb.ProduceRequest{
 		Topic:       "test-topic",
@@ -83,7 +83,7 @@ func TestDataServer_Produce_CRCMismatch(t *testing.T) {
 	batch := validBatch(t)
 	// Corrupt one byte of the CRC field (bytes [16:20]).
 	batch[17] ^= 0xFF
-	srv := New(&stubDataCoordinator{}, nil, nil)
+	srv := NewServer(&stubDataCoordinator{}, nil, nil, nil)
 
 	_, err := srv.Produce(context.Background(), &pb.ProduceRequest{
 		Topic:     "test-topic",
@@ -106,7 +106,7 @@ func TestDataServer_Produce_TooLarge(t *testing.T) {
 	// Set batch_length field to len(padded) so the length check passes.
 	binary.BigEndian.PutUint32(padded[8:12], uint32(len(padded)))
 
-	srv := New(&stubDataCoordinator{}, nil, nil)
+	srv := NewServer(&stubDataCoordinator{}, nil, nil, nil)
 	_, err := srv.Produce(context.Background(), &pb.ProduceRequest{
 		Topic:     "test-topic",
 		BatchData: padded,
@@ -119,11 +119,11 @@ func TestDataServer_Produce_TooLarge(t *testing.T) {
 
 func TestDataServer_Produce_NotLeader(t *testing.T) {
 	batch := validBatch(t)
-	srv := New(&stubDataCoordinator{
+	srv := NewServer(&stubDataCoordinator{
 		produceFn: func(_ context.Context, _ string, _ int32, _ []byte, _ coorddata.AcksMode) (int64, error) {
 			return -1, &coorddata.NotLeaderError{LeaderNodeID: 2, LeaderAddress: "broker2:9092"}
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	_, err := srv.Produce(context.Background(), &pb.ProduceRequest{
 		Topic:     "test-topic",
@@ -163,11 +163,11 @@ func TestDataServer_Produce_NotLeader(t *testing.T) {
 }
 
 func TestDataServer_GetOffsets_Earliest(t *testing.T) {
-	srv := New(&stubDataCoordinator{
+	srv := NewServer(&stubDataCoordinator{
 		getEarliestOffsetFn: func(_ context.Context, _ string, _ int32) (int64, error) {
 			return 0, nil
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	resp, err := srv.GetOffsets(context.Background(), &pb.GetOffsetsRequest{
 		Topic:       "test-topic",
@@ -183,11 +183,11 @@ func TestDataServer_GetOffsets_Earliest(t *testing.T) {
 }
 
 func TestDataServer_GetOffsets_ByTimestamp_NotFound(t *testing.T) {
-	srv := New(&stubDataCoordinator{
+	srv := NewServer(&stubDataCoordinator{
 		getOffsetByTimestampFn: func(_ context.Context, _ string, _ int32, _ int64) (int64, error) {
 			return -1, ErrOffsetNotFound
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	_, err := srv.GetOffsets(context.Background(), &pb.GetOffsetsRequest{
 		Topic:       "test-topic",
@@ -223,11 +223,11 @@ func TestValidateBatch_BadBatchLength(t *testing.T) {
 
 func TestDataServer_Fetch_ImmediateData(t *testing.T) {
 	records := validBatch(t)
-	srv := New(&stubDataCoordinator{
+	srv := NewServer(&stubDataCoordinator{
 		fetchFn: func(_ context.Context, _ string, _ int32, _ int64, _ int, _ int64) ([]byte, int64, error) {
 			return records, 10, nil
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	resp, err := srv.Fetch(context.Background(), &pb.FetchRequest{
 		Topic:       "test-topic",
@@ -247,11 +247,11 @@ func TestDataServer_Fetch_ImmediateData(t *testing.T) {
 }
 
 func TestDataServer_Fetch_EmptyNoWait(t *testing.T) {
-	srv := New(&stubDataCoordinator{
+	srv := NewServer(&stubDataCoordinator{
 		fetchFn: func(_ context.Context, _ string, _ int32, offset int64, _ int, maxWaitMs int64) ([]byte, int64, error) {
 			return nil, offset, nil
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	resp, err := srv.Fetch(context.Background(), &pb.FetchRequest{
 		Topic:       "test-topic",
@@ -272,7 +272,7 @@ func TestDataServer_Fetch_EmptyNoWait(t *testing.T) {
 
 func TestDataServer_Fetch_LongPollReturnsData(t *testing.T) {
 	records := validBatch(t)
-	srv := New(&stubDataCoordinator{
+	srv := NewServer(&stubDataCoordinator{
 		fetchFn: func(ctx context.Context, _ string, _ int32, _ int64, _ int, _ int64) ([]byte, int64, error) {
 			select {
 			case <-time.After(10 * time.Millisecond):
@@ -281,7 +281,7 @@ func TestDataServer_Fetch_LongPollReturnsData(t *testing.T) {
 				return nil, 0, ctx.Err()
 			}
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	resp, err := srv.Fetch(context.Background(), &pb.FetchRequest{
 		Topic:       "test-topic",
@@ -301,11 +301,11 @@ func TestDataServer_Fetch_LongPollReturnsData(t *testing.T) {
 }
 
 func TestDataServer_Fetch_OffsetOutOfRange(t *testing.T) {
-	srv := New(&stubDataCoordinator{
+	srv := NewServer(&stubDataCoordinator{
 		fetchFn: func(_ context.Context, _ string, _ int32, _ int64, _ int, _ int64) ([]byte, int64, error) {
 			return nil, 0, ErrOffsetOutOfRange
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	_, err := srv.Fetch(context.Background(), &pb.FetchRequest{
 		Topic:       "test-topic",
@@ -319,11 +319,11 @@ func TestDataServer_Fetch_OffsetOutOfRange(t *testing.T) {
 }
 
 func TestDataServer_Fetch_NotLeader(t *testing.T) {
-	srv := New(&stubDataCoordinator{
+	srv := NewServer(&stubDataCoordinator{
 		fetchFn: func(_ context.Context, _ string, _ int32, _ int64, _ int, _ int64) ([]byte, int64, error) {
 			return nil, 0, &coorddata.NotLeaderError{LeaderNodeID: 3, LeaderAddress: "broker3:9092"}
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	_, err := srv.Fetch(context.Background(), &pb.FetchRequest{
 		Topic:       "test-topic",
@@ -364,7 +364,7 @@ func TestDataServer_Fetch_NotLeader(t *testing.T) {
 }
 
 func TestDataServer_Fetch_CtxCancelled(t *testing.T) {
-	srv := New(&stubDataCoordinator{
+	srv := NewServer(&stubDataCoordinator{
 		fetchFn: func(ctx context.Context, _ string, _ int32, _ int64, _ int, _ int64) ([]byte, int64, error) {
 			select {
 			case <-ctx.Done():
@@ -373,7 +373,7 @@ func TestDataServer_Fetch_CtxCancelled(t *testing.T) {
 				return nil, 0, nil
 			}
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
@@ -423,7 +423,7 @@ func (s *stubGroupCoordinator) FetchCommittedOffsets(ctx context.Context, groupI
 }
 
 func TestDataServer_JoinGroup_NotLeader(t *testing.T) {
-	srv := New(nil, nil, func() (bool, string) { return false, "leader:9092" })
+	srv := NewServer(nil, nil, func() (bool, string) { return false, "leader:9092" }, nil)
 	_, err := srv.JoinGroup(context.Background(), &pb.JoinGroupRequest{
 		GroupId:          "g1",
 		SubscribedTopics: []string{"t1"},
@@ -458,7 +458,7 @@ func TestDataServer_JoinGroup_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	srv := New(nil, gc, func() (bool, string) { return true, "" })
+	srv := NewServer(nil, gc, func() (bool, string) { return true, "" }, nil)
 	resp, err := srv.JoinGroup(context.Background(), &pb.JoinGroupRequest{
 		GroupId:          "g1",
 		SubscribedTopics: []string{"t1"},
@@ -483,7 +483,7 @@ func TestDataServer_Heartbeat_RebalanceRequired(t *testing.T) {
 			return true, nil
 		},
 	}
-	srv := New(nil, gc, func() (bool, string) { return true, "" })
+	srv := NewServer(nil, gc, func() (bool, string) { return true, "" }, nil)
 	resp, err := srv.Heartbeat(context.Background(), &pb.HeartbeatRequest{
 		GroupId:      "g1",
 		MemberId:     "m1",
@@ -503,7 +503,7 @@ func TestDataServer_CommitOffset_StaleGeneration(t *testing.T) {
 			return ErrStaleGeneration
 		},
 	}
-	srv := New(nil, gc, func() (bool, string) { return true, "" })
+	srv := NewServer(nil, gc, func() (bool, string) { return true, "" }, nil)
 	_, err := srv.CommitOffset(context.Background(), &pb.CommitOffsetRequest{
 		GroupId:      "g1",
 		MemberId:     "m1",
@@ -525,7 +525,7 @@ func TestDataServer_FetchCommittedOffsets_MissingPartition(t *testing.T) {
 			return result, nil
 		},
 	}
-	srv := New(nil, gc, func() (bool, string) { return true, "" })
+	srv := NewServer(nil, gc, func() (bool, string) { return true, "" }, nil)
 	resp, err := srv.FetchCommittedOffsets(context.Background(), &pb.FetchCommittedOffsetsRequest{
 		GroupId: "g1",
 		Partitions: []*pb.TopicPartition{
@@ -549,7 +549,7 @@ func TestDataServer_LeaveGroup_NotMember(t *testing.T) {
 			return ErrNotGroupMember
 		},
 	}
-	srv := New(nil, gc, func() (bool, string) { return true, "" })
+	srv := NewServer(nil, gc, func() (bool, string) { return true, "" }, nil)
 	_, err := srv.LeaveGroup(context.Background(), &pb.LeaveGroupRequest{
 		GroupId:  "g1",
 		MemberId: "m1",
