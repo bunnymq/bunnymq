@@ -174,18 +174,33 @@ func (cc *ClusterCoordinator) Bootstrap(ctx context.Context) error {
 
 	// Step 3 — register this node with the Data API address so clients can
 	// look up the leader's gRPC endpoint via DescribeCluster/DescribeTopic.
+	// Retry within the bootstrap deadline: a transient leader change between
+	// steps 2 and 3 would otherwise cause a permanent bootstrap failure.
 	regAddr := cc.config.DataAddr
 	if regAddr == "" {
 		regAddr = cc.config.RaftAddress
 	}
-	if _, err := cc.raftHost.SyncProposeMetadata(ctx, metadata.MetadataCommand{
+	regCmd := metadata.MetadataCommand{
 		Type: metadata.CmdRegisterNode,
 		RegisterNode: &metadata.RegisterNodeCmd{
 			NodeID:  cc.config.NodeID,
 			Address: regAddr,
 		},
-	}); err != nil {
-		return fmt.Errorf("register node: %w", err)
+	}
+	var regErr error
+	for {
+		_, regErr = cc.raftHost.SyncProposeMetadata(ctx, regCmd)
+		if regErr == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("register node: %w", regErr)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 
 	// Step 4 — run initial partition reconciliation.
