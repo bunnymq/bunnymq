@@ -7,12 +7,22 @@ import (
 	"io"
 	"os"
 	"sync/atomic"
+	"time"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/bunnymq/bunnymq/internal/config"
 	stor "github.com/bunnymq/bunnymq/internal/storage"
 )
+
+// PartitionFSMMetrics holds pre-labeled Prometheus observers for a single partition shard.
+// All fields may be nil; nil fields are silently skipped.
+type PartitionFSMMetrics struct {
+	FSMUpdateDuration       prometheus.Observer
+	SnapshotSaveDuration    prometheus.Observer
+	SnapshotRecoverDuration prometheus.Observer
+}
 
 // PartitionFSM implements dragonboat's IOnDiskStateMachine for a single partition shard.
 // It is a thin adapter: its state IS the Storage instance.
@@ -23,16 +33,23 @@ type PartitionFSM struct {
 	sidecarPath      string
 	dir              string
 	cfg              *config.StorageConfig
+	metrics          *PartitionFSMMetrics
 }
 
 var _ sm.IOnDiskStateMachine = (*PartitionFSM)(nil)
 
 // NewPartitionFSM constructs a PartitionFSM that will open storage in dir on Open().
-func NewPartitionFSM(dir, sidecarPath string, cfg *config.StorageConfig) *PartitionFSM {
+// Pass an optional *PartitionFSMMetrics to enable per-shard observability; nil disables recording.
+func NewPartitionFSM(dir, sidecarPath string, cfg *config.StorageConfig, m ...*PartitionFSMMetrics) *PartitionFSM {
+	var mtrx *PartitionFSMMetrics
+	if len(m) > 0 {
+		mtrx = m[0]
+	}
 	return &PartitionFSM{
 		dir:         dir,
 		sidecarPath: sidecarPath,
 		cfg:         cfg,
+		metrics:     mtrx,
 	}
 }
 
@@ -62,6 +79,7 @@ func (fsm *PartitionFSM) Open(stopc <-chan struct{}) (uint64, error) {
 }
 
 func (fsm *PartitionFSM) Update(entries []sm.Entry) ([]sm.Entry, error) {
+	start := time.Now()
 	for i := range entries {
 		e := &entries[i]
 		switch e.Cmd[0] {
@@ -88,6 +106,9 @@ func (fsm *PartitionFSM) Update(entries []sm.Entry) ([]sm.Entry, error) {
 	}
 
 	fsm.lastAppliedIndex.Store(entries[len(entries)-1].Index)
+	if m := fsm.metrics; m != nil && m.FSMUpdateDuration != nil {
+		m.FSMUpdateDuration.Observe(time.Since(start).Seconds())
+	}
 	return entries, nil
 }
 
@@ -143,12 +164,20 @@ func (fsm *PartitionFSM) PrepareSnapshot() (any, error) {
 }
 
 func (fsm *PartitionFSM) SaveSnapshot(_ any, w io.Writer, _ <-chan struct{}) error {
+	start := time.Now()
 	_, err := w.Write([]byte("strategy-a-noop"))
+	if m := fsm.metrics; m != nil && m.SnapshotSaveDuration != nil {
+		m.SnapshotSaveDuration.Observe(time.Since(start).Seconds())
+	}
 	return err
 }
 
 func (fsm *PartitionFSM) RecoverFromSnapshot(r io.Reader, _ <-chan struct{}) error {
+	start := time.Now()
 	_, _ = io.Copy(io.Discard, r)
+	if m := fsm.metrics; m != nil && m.SnapshotRecoverDuration != nil {
+		m.SnapshotRecoverDuration.Observe(time.Since(start).Seconds())
+	}
 	return nil
 }
 

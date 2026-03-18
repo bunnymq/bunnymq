@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/bunnymq/bunnymq/internal/api"
+	cmetrics "github.com/bunnymq/bunnymq/internal/cluster"
 	"github.com/bunnymq/bunnymq/internal/config"
 	clustercoord "github.com/bunnymq/bunnymq/internal/coordinator/cluster"
 	datacoord "github.com/bunnymq/bunnymq/internal/coordinator/data"
@@ -150,7 +151,7 @@ func run(cfg *config.Config, logger *zap.Logger) error {
 		ReconcileIntervalMs:    cfg.Coordinator.ReconcileIntervalMs,
 		LeaderCheckIntervalMs:  cfg.Coordinator.LeaderCheckIntervalMs,
 		EagerReconcileOnCreate: cfg.Coordinator.EagerReconcileOnCreate,
-	}, bh, dc, logger.Named("cluster"))
+	}, bh, dc, cmetrics.NoopRaftMetrics(), logger.Named("cluster"))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

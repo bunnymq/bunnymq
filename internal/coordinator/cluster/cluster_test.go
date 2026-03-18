@@ -9,10 +9,11 @@ import (
 	"time"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
+	"go.uber.org/zap"
 
+	cmetrics "github.com/bunnymq/bunnymq/internal/cluster"
 	"github.com/bunnymq/bunnymq/internal/metadata"
 	"github.com/bunnymq/bunnymq/internal/partition"
-	"go.uber.org/zap"
 )
 
 // --- stub raft host ---
@@ -145,7 +146,7 @@ func newCoord(host raftHostIface) *ClusterCoordinator {
 		RaftAddress:        "localhost:1",
 		Peers:              map[uint64]string{1: "localhost:1"},
 		BootstrapTimeoutMs: 5000,
-	}, host, &stubDataCoord{}, zap.NewNop())
+	}, host, &stubDataCoord{}, cmetrics.NoopRaftMetrics(), zap.NewNop())
 }
 
 func newCoordWithData(host raftHostIface, dc DataCoordinatorIface) *ClusterCoordinator {
@@ -157,7 +158,7 @@ func newCoordWithData(host raftHostIface, dc DataCoordinatorIface) *ClusterCoord
 		BootstrapTimeoutMs:    5000,
 		ReconcileIntervalMs:   3000,
 		LeaderCheckIntervalMs: 3000,
-	}, host, dc, zap.NewNop())
+	}, host, dc, cmetrics.NoopRaftMetrics(), zap.NewNop())
 }
 
 // --- assignReplicas tests ---
@@ -288,7 +289,7 @@ func TestBootstrap_Timeout(t *testing.T) {
 		NodeID:             1,
 		Peers:              map[uint64]string{1: "localhost:1"},
 		BootstrapTimeoutMs: 100, // very short timeout
-	}, host, &stubDataCoord{}, zap.NewNop())
+	}, host, &stubDataCoord{}, cmetrics.NoopRaftMetrics(), zap.NewNop())
 
 	ctx := context.Background()
 	err := cc.Bootstrap(ctx)
