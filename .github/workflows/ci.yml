@@ -44,4 +44,4 @@ jobs:
         run: make test
 
       - name: Integration test
-        run: make integration-test
+        run: make integration-test-local
