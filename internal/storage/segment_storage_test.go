@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"go.uber.org/zap"
+
 	"github.com/bunnymq/bunnymq/internal/config"
 )
 
@@ -47,7 +49,7 @@ func putInt64BE(b []byte, v int64) {
 func newTestSegment(t *testing.T, indexSampleBytes int) (*SegmentStorage, string) {
 	t.Helper()
 	dir := t.TempDir()
-	seg, err := NewSegmentStorage(dir, 0, testConfig(indexSampleBytes))
+	seg, err := NewSegmentStorage(dir, 0, testConfig(indexSampleBytes), zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewSegmentStorage: %v", err)
 	}
@@ -177,7 +179,7 @@ func TestSegmentStorage_IndexSampling(t *testing.T) {
 func TestSegmentStorage_Seal(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testConfig(4096)
-	seg, err := NewSegmentStorage(dir, 0, cfg)
+	seg, err := NewSegmentStorage(dir, 0, cfg, zap.NewNop())
 	if err != nil {
 		t.Fatalf("NewSegmentStorage: %v", err)
 	}

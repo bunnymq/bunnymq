@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // EnforceRetention deletes sealed segments that violate the retention policy.
@@ -79,6 +81,10 @@ func (s *storageImpl) EnforceRetention(retentionMs int64, retentionBytes int64) 
 		_ = os.Remove(base + ".index")
 		_ = os.Remove(base + ".timeindex")
 		s.metrics.recordRetentionDeletion(s.topic, s.partitionID, reason)
+		s.logger.Info("segment deleted by retention",
+			zap.Int64("base_offset", seg.BaseOffset()),
+			zap.String("reason", reason),
+		)
 		deleted++
 	}
 

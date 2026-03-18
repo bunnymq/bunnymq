@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"go.uber.org/zap"
+
 	"github.com/bunnymq/bunnymq/internal/coordinator/cluster"
 	pb "github.com/bunnymq/bunnymq/pkg/proto/v1"
 	"google.golang.org/grpc/codes"
@@ -13,12 +15,16 @@ import (
 // ManagementServer implements pb.ManagementServiceServer by delegating to ClusterCoordinatorIface.
 type ManagementServer struct {
 	pb.UnimplementedManagementServiceServer
-	cc ClusterCoordinatorIface
+	cc     ClusterCoordinatorIface
+	logger *zap.Logger
 }
 
-// New returns a ManagementServer backed by the given coordinator.
-func New(cc ClusterCoordinatorIface) *ManagementServer {
-	return &ManagementServer{cc: cc}
+// NewServer returns a ManagementServer backed by the given coordinator.
+func NewServer(cc ClusterCoordinatorIface, logger *zap.Logger) *ManagementServer {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &ManagementServer{cc: cc, logger: logger}
 }
 
 func (s *ManagementServer) CreateTopic(ctx context.Context, req *pb.CreateTopicRequest) (*pb.CreateTopicResponse, error) {

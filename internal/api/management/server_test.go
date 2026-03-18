@@ -58,11 +58,11 @@ func TestManagementServer_CreateTopic_Success(t *testing.T) {
 		RetentionBytes:    -1,
 		CreatedAtMs:       1000000,
 	}
-	srv := New(&stubCoordinator{
+	srv := NewServer(&stubCoordinator{
 		createTopicFn: func(_ context.Context, _ string, _ int32, _ int32, _ cluster.TopicConfigOverrides) (cluster.TopicInfo, error) {
 			return want, nil
 		},
-	})
+	}, nil)
 
 	resp, err := srv.CreateTopic(context.Background(), &pb.CreateTopicRequest{
 		Name:              "my-topic",
@@ -87,11 +87,11 @@ func TestManagementServer_CreateTopic_Success(t *testing.T) {
 }
 
 func TestManagementServer_CreateTopic_AlreadyExists(t *testing.T) {
-	srv := New(&stubCoordinator{
+	srv := NewServer(&stubCoordinator{
 		createTopicFn: func(_ context.Context, _ string, _ int32, _ int32, _ cluster.TopicConfigOverrides) (cluster.TopicInfo, error) {
 			return cluster.TopicInfo{}, ErrTopicAlreadyExists
 		},
-	})
+	}, nil)
 
 	_, err := srv.CreateTopic(context.Background(), &pb.CreateTopicRequest{Name: "dup"})
 	if err == nil {
@@ -105,11 +105,11 @@ func TestManagementServer_CreateTopic_AlreadyExists(t *testing.T) {
 }
 
 func TestManagementServer_DeleteTopic_NotFound(t *testing.T) {
-	srv := New(&stubCoordinator{
+	srv := NewServer(&stubCoordinator{
 		deleteTopicFn: func(_ context.Context, _ string) error {
 			return ErrTopicNotFound
 		},
-	})
+	}, nil)
 
 	_, err := srv.DeleteTopic(context.Background(), &pb.DeleteTopicRequest{Name: "missing"})
 	if err == nil {
@@ -123,7 +123,7 @@ func TestManagementServer_DeleteTopic_NotFound(t *testing.T) {
 }
 
 func TestManagementServer_DescribeTopic_Success(t *testing.T) {
-	srv := New(&stubCoordinator{
+	srv := NewServer(&stubCoordinator{
 		describeTopicFn: func(_ context.Context, _ string) (cluster.TopicDescription, error) {
 			return cluster.TopicDescription{
 				TopicInfo: cluster.TopicInfo{Name: "t", PartitionCount: 3},
@@ -134,7 +134,7 @@ func TestManagementServer_DescribeTopic_Success(t *testing.T) {
 				},
 			}, nil
 		},
-	})
+	}, nil)
 
 	resp, err := srv.DescribeTopic(context.Background(), &pb.DescribeTopicRequest{Name: "t"})
 	if err != nil {
@@ -151,11 +151,11 @@ func TestManagementServer_DescribeTopic_Success(t *testing.T) {
 }
 
 func TestManagementServer_AlterTopicPartitions_InvalidArg(t *testing.T) {
-	srv := New(&stubCoordinator{
+	srv := NewServer(&stubCoordinator{
 		alterPartitionCountFn: func(_ context.Context, _ string, _ int32) error {
 			return ErrInvalidArgument
 		},
-	})
+	}, nil)
 
 	_, err := srv.AlterTopicPartitions(context.Background(), &pb.AlterTopicPartitionsRequest{Name: "t", NewPartitionCount: 1})
 	if err == nil {
@@ -169,7 +169,7 @@ func TestManagementServer_AlterTopicPartitions_InvalidArg(t *testing.T) {
 }
 
 func TestManagementServer_DescribeCluster(t *testing.T) {
-	srv := New(&stubCoordinator{
+	srv := NewServer(&stubCoordinator{
 		describeClusterFn: func(_ context.Context) (cluster.ClusterDescription, error) {
 			return cluster.ClusterDescription{
 				Nodes: []cluster.NodeDescriptor{
@@ -179,7 +179,7 @@ func TestManagementServer_DescribeCluster(t *testing.T) {
 				},
 			}, nil
 		},
-	})
+	}, nil)
 
 	resp, err := srv.DescribeCluster(context.Background(), &pb.DescribeClusterRequest{})
 	if err != nil {

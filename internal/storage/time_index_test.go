@@ -4,13 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func openTestTimeIndex(t *testing.T, segMaxBytes int64, indexSampleBytes int) (*TimeIndexSegment, string) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.timeindex")
-	idx, err := OpenTimeIndex(path, 0, segMaxBytes, indexSampleBytes)
+	idx, err := OpenTimeIndex(path, 0, segMaxBytes, indexSampleBytes, zap.NewNop())
 	if err != nil {
 		t.Fatalf("OpenTimeIndex: %v", err)
 	}

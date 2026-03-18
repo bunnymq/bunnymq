@@ -9,20 +9,23 @@ import (
 	"sort"
 	"strconv"
 
+	"go.uber.org/zap"
+
 	"github.com/bunnymq/bunnymq/internal/config"
 )
 
 // recoverStorage enumerates .log files in dir, opens sealed segments read-only,
 // and recovers the active segment via CRC scan. Returns the segment list,
 // nextOffset derived from the log, and the number of CRC errors found.
-func recoverStorage(dir string, cfg *config.StorageConfig) ([]*SegmentStorage, int64, int, error) {
+// logger receives a warn when a CRC mismatch is detected during recovery.
+func recoverStorage(dir string, cfg *config.StorageConfig, logger *zap.Logger) ([]*SegmentStorage, int64, int, error) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.log"))
 	if err != nil {
 		return nil, 0, 0, err
 	}
 
 	if len(matches) == 0 {
-		seg, err := NewSegmentStorage(dir, 0, cfg)
+		seg, err := NewSegmentStorage(dir, 0, cfg, logger)
 		if err != nil {
 			return nil, 0, 0, err
 		}
@@ -40,7 +43,7 @@ func recoverStorage(dir string, cfg *config.StorageConfig) ([]*SegmentStorage, i
 		if err != nil {
 			return nil, 0, 0, fmt.Errorf("invalid segment filename %s: %w", path, err)
 		}
-		seg, err := OpenSegmentStorage(dir, offset, cfg, true)
+		seg, err := OpenSegmentStorage(dir, offset, cfg, true, logger)
 		if err != nil {
 			return nil, 0, 0, err
 		}
@@ -60,6 +63,13 @@ func recoverStorage(dir string, cfg *config.StorageConfig) ([]*SegmentStorage, i
 		return nil, 0, 0, err
 	}
 
+	if crcErrors > 0 {
+		logger.Warn("CRC mismatch during crash recovery scan",
+			zap.Int64("byte_position", validPos),
+			zap.Int64("truncated_to", validPos),
+		)
+	}
+
 	// Truncate the log to the last valid byte if needed.
 	if err := os.Truncate(activePath, validPos); err != nil {
 		return nil, 0, 0, err
@@ -70,11 +80,11 @@ func recoverStorage(dir string, cfg *config.StorageConfig) ([]*SegmentStorage, i
 	_ = os.Remove(basePath + ".index")
 	_ = os.Remove(basePath + ".timeindex")
 
-	offsetIdx, err := OpenOffsetIndex(basePath+".index", activeOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes)
+	offsetIdx, err := OpenOffsetIndex(basePath+".index", activeOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes, logger)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	timeIdx, err := OpenTimeIndex(basePath+".timeindex", activeOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes)
+	timeIdx, err := OpenTimeIndex(basePath+".timeindex", activeOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes, logger)
 	if err != nil {
 		_ = offsetIdx.Close()
 		return nil, 0, 0, err
@@ -178,7 +188,7 @@ func scanActiveLog(logPath string, baseOffset int64) (validPos int64, nextOffset
 
 // rebuildSegmentIndexes closes and recreates the index files for seg, then
 // repopulates them by scanning the log. Used by TruncateTo.
-func rebuildSegmentIndexes(dir string, seg *SegmentStorage, cfg *config.StorageConfig) error {
+func rebuildSegmentIndexes(dir string, seg *SegmentStorage, cfg *config.StorageConfig, logger *zap.Logger) error {
 	basePath := segmentBasePath(dir, seg.baseOffset)
 
 	if err := seg.offsetIdx.Close(); err != nil {
@@ -190,11 +200,11 @@ func rebuildSegmentIndexes(dir string, seg *SegmentStorage, cfg *config.StorageC
 	_ = os.Remove(basePath + ".index")
 	_ = os.Remove(basePath + ".timeindex")
 
-	offsetIdx, err := OpenOffsetIndex(basePath+".index", seg.baseOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes)
+	offsetIdx, err := OpenOffsetIndex(basePath+".index", seg.baseOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes, logger)
 	if err != nil {
 		return err
 	}
-	timeIdx, err := OpenTimeIndex(basePath+".timeindex", seg.baseOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes)
+	timeIdx, err := OpenTimeIndex(basePath+".timeindex", seg.baseOffset, cfg.SegmentMaxBytes, cfg.IndexSampleBytes, logger)
 	if err != nil {
 		_ = offsetIdx.Close()
 		return err

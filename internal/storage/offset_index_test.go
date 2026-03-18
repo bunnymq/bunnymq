@@ -5,13 +5,15 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func openTestIndex(t *testing.T, segMaxBytes int64, indexSampleBytes int) (*OffsetIndexSegment, string) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.index")
-	idx, err := OpenOffsetIndex(path, 0, segMaxBytes, indexSampleBytes)
+	idx, err := OpenOffsetIndex(path, 0, segMaxBytes, indexSampleBytes, zap.NewNop())
 	if err != nil {
 		t.Fatalf("OpenOffsetIndex: %v", err)
 	}

@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/bunnymq/bunnymq/internal/config"
 )
 
@@ -79,11 +81,20 @@ func WithMetrics(m *StorageMetrics, topic, partitionID string) OpenOption {
 	}
 }
 
+// WithLogger wires a *zap.Logger into the storage. A child logger scoped with
+// module, topic, and partition_id fields is created inside Open.
+func WithLogger(logger *zap.Logger) OpenOption {
+	return func(s *storageImpl) {
+		s.logger = logger
+	}
+}
+
 type storageImpl struct {
 	dir         string
 	topic       string
 	partitionID string
 	metrics     *StorageMetrics
+	logger      *zap.Logger
 	segments    []*SegmentStorage
 	nextOffset  int64
 	segMu       sync.RWMutex
@@ -100,8 +111,8 @@ type storageImpl struct {
 var _ Storage = (*storageImpl)(nil)
 
 // Open enumerates and recovers segments in dir, starts the retention goroutine,
-// and returns a ready Storage. Optional OpenOption values (e.g. WithMetrics) may
-// be passed to attach metrics and partition labels without changing existing callers.
+// and returns a ready Storage. Optional OpenOption values (e.g. WithMetrics,
+// WithLogger) may be passed to attach observability without changing existing callers.
 func Open(dir string, cfg *config.StorageConfig, opts ...OpenOption) (*storageImpl, error) {
 	s := &storageImpl{
 		dir:       dir,
@@ -112,8 +123,20 @@ func Open(dir string, cfg *config.StorageConfig, opts ...OpenOption) (*storageIm
 		opt(s)
 	}
 
+	if s.logger == nil {
+		s.logger = zap.NewNop()
+	}
+	loggerFields := []zap.Field{zap.String("module", "storage")}
+	if s.topic != "" {
+		loggerFields = append(loggerFields,
+			zap.String("topic", s.topic),
+			zap.String("partition_id", s.partitionID),
+		)
+	}
+	s.logger = s.logger.With(loggerFields...)
+
 	recoveryStart := time.Now()
-	segments, nextOffset, crcErrors, err := recoverStorage(dir, cfg)
+	segments, nextOffset, crcErrors, err := recoverStorage(dir, cfg, s.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -127,6 +150,12 @@ func Open(dir string, cfg *config.StorageConfig, opts ...OpenOption) (*storageIm
 		earliestOff = segments[0].BaseOffset()
 	}
 	s.metrics.recordRecovery(s.topic, s.partitionID, recoveryDur, len(segments), earliestOff, nextOffset, crcErrors)
+
+	s.logger.Info("storage opened",
+		zap.Int("segment_count", len(segments)),
+		zap.Int64("earliest_offset", earliestOff),
+		zap.Int64("latest_offset", nextOffset),
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.retCancel = cancel
@@ -148,9 +177,10 @@ func (s *storageImpl) active() *SegmentStorage {
 
 func (s *storageImpl) roll() error {
 	if err := s.active().Seal(); err != nil {
+		s.logger.Error("index msync failed on segment seal", zap.Error(err))
 		return err
 	}
-	newSeg, err := NewSegmentStorage(s.dir, s.nextOffset, s.config)
+	newSeg, err := NewSegmentStorage(s.dir, s.nextOffset, s.config, s.logger)
 	if err != nil {
 		return err
 	}
@@ -172,16 +202,21 @@ func (s *storageImpl) Append(batch []byte) (int64, error) {
 	binary.BigEndian.PutUint64(batch[0:8], uint64(baseOffset))
 	if _, err := s.active().Append(batch); err != nil {
 		s.segMu.Unlock()
+		s.logger.Error("log write failed", zap.Error(err))
 		return 0, err
 	}
 	recordCount := int64(binary.BigEndian.Uint32(batch[12:16]))
 	s.nextOffset += recordCount
 	rolled := false
+	var oldBase, newBase, bytesWritten int64
 	if s.active().LogSize() >= s.config.SegmentMaxBytes {
+		oldBase = s.active().BaseOffset()
+		bytesWritten = s.active().LogSize()
 		if err := s.roll(); err != nil {
 			s.segMu.Unlock()
 			return 0, err
 		}
+		newBase = s.active().BaseOffset()
 		rolled = true
 	}
 	activeBytes := s.active().LogSize()
@@ -194,7 +229,17 @@ func (s *storageImpl) Append(batch []byte) (int64, error) {
 	s.metrics.recordAppendGauges(s.topic, s.partitionID, latestOff, activeBytes)
 	if rolled {
 		s.metrics.recordRoll(s.topic, s.partitionID, segCount)
+		s.logger.Info("segment rolled",
+			zap.Int64("old_base_offset", oldBase),
+			zap.Int64("new_base_offset", newBase),
+			zap.Int64("bytes_written", bytesWritten),
+		)
 	}
+
+	s.logger.Debug("batch appended",
+		zap.Int64("base_offset", baseOffset),
+		zap.Int("batch_bytes", len(batch)),
+	)
 
 	s.chanMu.Lock()
 	old := s.newDataCh
@@ -236,7 +281,12 @@ func (s *storageImpl) Read(offset int64, maxBytes int) ([]byte, int64, error) {
 		}
 	}
 
-	return segs[lo].Read(offset, maxBytes)
+	records, next, err := segs[lo].Read(offset, maxBytes)
+	s.logger.Debug("read request served",
+		zap.Int64("offset", offset),
+		zap.Int("bytes_returned", len(records)),
+	)
+	return records, next, err
 }
 
 func (s *storageImpl) ReadByTime(timestampMs int64, maxBytes int) ([]byte, int64, error) {
@@ -349,7 +399,7 @@ func (s *storageImpl) TruncateTo(offset int64) error {
 	}
 
 	// Rebuild indexes after truncation.
-	if err := rebuildSegmentIndexes(s.dir, activeSeg, s.config); err != nil {
+	if err := rebuildSegmentIndexes(s.dir, activeSeg, s.config, s.logger); err != nil {
 		return err
 	}
 
