@@ -358,6 +358,13 @@ func (c *Consumer) Poll(ctx context.Context, maxWaitMs int64) ([]Record, error) 
 				}
 				continue
 			}
+			// Transient: all bootstrap servers temporarily unreachable (e.g. leader
+			// election in progress). Invalidate the cache and skip this partition;
+			// the caller retries on the next Poll call.
+			if errors.Is(err, ErrNoReachableServer) {
+				c.meta.Invalidate(pw.tp.Topic)
+				continue
+			}
 			return nil, err
 		}
 		c.mu.Lock()

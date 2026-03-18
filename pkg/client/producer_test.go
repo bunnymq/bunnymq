@@ -47,16 +47,21 @@ func newTestServer(t *testing.T) *testServer {
 // fakeMgmtSvc is a configurable ManagementService stub.
 type fakeMgmtSvc struct {
 	pb.UnimplementedManagementServiceServer
-	mu             sync.Mutex
-	topicResp      *pb.DescribeTopicResponse
-	topicErr       error
-	clusterResp    *pb.DescribeClusterResponse
-	clusterErr     error
+	mu              sync.Mutex
+	topicResp       *pb.DescribeTopicResponse
+	topicErr        error
+	clusterResp     *pb.DescribeClusterResponse
+	clusterErr      error
+	topicFailCount  int // return Unavailable for the first N DescribeTopic calls
 }
 
 func (f *fakeMgmtSvc) DescribeTopic(_ context.Context, _ *pb.DescribeTopicRequest) (*pb.DescribeTopicResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.topicFailCount > 0 {
+		f.topicFailCount--
+		return nil, status.Error(codes.Unavailable, "transient failure")
+	}
 	if f.topicErr != nil {
 		return nil, f.topicErr
 	}
@@ -169,6 +174,54 @@ func setTopicMeta(ts *testServer, topic string, partitionCount int, leaderAddr s
 }
 
 // ---- tests ----
+
+// TestProducer_Send_RetriesOnNoReachableServer verifies that sendToPartition retries
+// when all bootstrap servers temporarily fail metadata discovery (ErrNoReachableServer),
+// succeeding once the server becomes available within MaxRetries attempts.
+func TestProducer_Send_RetriesOnNoReachableServer(t *testing.T) {
+	ts := newTestServer(t)
+
+	// DescribeTopic fails for the first 2 calls, then succeeds.
+	ts.mgmtSvc.mu.Lock()
+	ts.mgmtSvc.topicFailCount = 2
+	ts.mgmtSvc.topicResp = &pb.DescribeTopicResponse{
+		Topic:      &pb.TopicInfo{Name: "my-topic", PartitionCount: 1},
+		Partitions: []*pb.PartitionInfo{{PartitionId: 0, LeaderNodeId: 1}},
+	}
+	ts.mgmtSvc.clusterResp = &pb.DescribeClusterResponse{
+		Nodes: []*pb.NodeInfo{{NodeId: 1, Address: ts.addr}},
+	}
+	ts.mgmtSvc.mu.Unlock()
+	ts.dataSvc.addResult(42, nil)
+
+	p, err := NewProducer(ProducerConfig{
+		Config: Config{
+			BootstrapServers: []string{ts.addr},
+			RequestTimeout:   500 * time.Millisecond,
+			RetryPolicy: RetryPolicy{
+				MaxRetries:     3,
+				InitialBackoff: 10 * time.Millisecond,
+				MaxBackoff:     100 * time.Millisecond,
+				BackoffFactor:  2.0,
+			},
+		},
+		DefaultAcks:      AcksAll,
+		MetadataCacheTTL: 0,
+	})
+	if err != nil {
+		t.Fatalf("NewProducer: %v", err)
+	}
+	defer p.Close() //nolint:errcheck
+
+	batchData := []byte{1, 2, 3, 4}
+	offset, err := p.SendBatch(context.Background(), "my-topic", 0, batchData, AcksAll)
+	if err != nil {
+		t.Fatalf("SendBatch: %v (expected retry to succeed)", err)
+	}
+	if offset != 42 {
+		t.Errorf("offset = %d, want 42", offset)
+	}
+}
 
 func TestProducer_Send_RoundRobin(t *testing.T) {
 	ts := newTestServer(t)

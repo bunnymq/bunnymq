@@ -243,6 +243,13 @@ func (p *Producer) sendToPartition(
 	for attempt := 0; ; attempt++ {
 		addr, err := p.leaderFor(ctx, topic, partID)
 		if err != nil {
+			// Retry transient metadata failures (e.g., all management servers
+			// temporarily unreachable during a leader election) using the same
+			// backoff policy applied to transport-level errors.
+			if errors.Is(err, ErrNoReachableServer) && attempt < p.config.RetryPolicy.MaxRetries {
+				time.Sleep(calcBackoff(attempt, p.config.RetryPolicy))
+				continue
+			}
 			return -1, err
 		}
 

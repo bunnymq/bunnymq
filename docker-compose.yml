@@ -1,0 +1,77 @@
+services:
+  broker1:
+    build: .
+    hostname: broker1
+    environment:
+      NODE_ID: "1"
+      RAFT_ADDR: "broker1:7001"
+      MGMT_ADDR: ":9091"
+      DATA_ADDR: ":9092"
+      METRICS_ADDR: ":9090"
+      DATA_DIR: "/data"
+      INITIAL_MEMBERS: "1=broker1:7001,2=broker2:7001,3=broker3:7001"
+    ports:
+      - "19091:9091"
+      - "19092:9092"
+      - "19090:9090"
+    volumes:
+      - broker1-data:/data
+    healthcheck:
+      test: ["CMD", "/bunnymq", "--health-check"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+
+  broker2:
+    build: .
+    hostname: broker2
+    environment:
+      NODE_ID: "2"
+      RAFT_ADDR: "broker2:7001"
+      MGMT_ADDR: ":9091"
+      DATA_ADDR: ":9092"
+      METRICS_ADDR: ":9090"
+      DATA_DIR: "/data"
+      INITIAL_MEMBERS: "1=broker1:7001,2=broker2:7001,3=broker3:7001"
+    ports:
+      - "29091:9091"
+      - "29092:9092"
+      - "29090:9090"
+    volumes:
+      - broker2-data:/data
+    healthcheck:
+      test: ["CMD", "/bunnymq", "--health-check"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+
+  broker3:
+    build: .
+    hostname: broker3
+    environment:
+      NODE_ID: "3"
+      RAFT_ADDR: "broker3:7001"
+      MGMT_ADDR: ":9091"
+      DATA_ADDR: ":9092"
+      METRICS_ADDR: ":9090"
+      DATA_DIR: "/data"
+      INITIAL_MEMBERS: "1=broker1:7001,2=broker2:7001,3=broker3:7001"
+    ports:
+      - "39091:9091"
+      - "39092:9092"
+      - "39090:9090"
+    volumes:
+      - broker3-data:/data
+    healthcheck:
+      test: ["CMD", "/bunnymq", "--health-check"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+
+volumes:
+  broker1-data:
+  broker2-data:
+  broker3-data:

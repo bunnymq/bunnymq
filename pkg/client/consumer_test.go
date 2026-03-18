@@ -233,6 +233,33 @@ func TestConsumer_Poll_NotLeader_SkipsPartition(t *testing.T) {
 	}
 }
 
+func TestConsumer_Poll_NoReachableServer_SkipsPartition(t *testing.T) {
+	ts := newConsumerTestServer(t)
+	setConsumerTopicMeta(ts, "my-topic", 1, ts.addr)
+
+	// DescribeTopic fails for the first call → ErrNoReachableServer in fetchPartition.
+	ts.mgmtSvc.mu.Lock()
+	ts.mgmtSvc.topicFailCount = 1
+	ts.mgmtSvc.mu.Unlock()
+
+	c := newConsumerForTest(t, ts.addr)
+	c.Seek("my-topic", 0, 0)
+
+	// Poll must not return an error; ErrNoReachableServer is treated as transient.
+	got, err := c.Poll(context.Background(), 500)
+	if err != nil {
+		t.Fatalf("Poll returned unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty slice on ErrNoReachableServer, got %d records", len(got))
+	}
+
+	// Metadata cache must have been invalidated so the next Poll re-discovers the leader.
+	if meta := c.meta.Get("my-topic"); meta != nil {
+		t.Error("meta cache entry should be invalidated after ErrNoReachableServer")
+	}
+}
+
 // ---- group mode test helpers ----
 
 type groupConsumerTestServer struct {

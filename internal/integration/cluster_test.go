@@ -363,13 +363,11 @@ func TestCluster_ProduceFetch(t *testing.T) {
 	defer ac.Close() //nolint:errcheck
 
 	ctx := context.Background()
-	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+	createTopicRetry(t, ac, client.CreateTopicRequest{
 		Name:              "smoke-topic",
 		PartitionCount:    partitionCount,
 		ReplicationFactor: 3,
-	}); err != nil {
-		t.Fatalf("CreateTopic: %v", err)
-	}
+	}, 30*time.Second)
 
 	waitPartitionsLeaders(t, adminAddr, "smoke-topic", partitionCount, 15*time.Second)
 
@@ -537,6 +535,27 @@ func sendOneBatch(t *testing.T, ctx context.Context, prod *client.Producer, topi
 	return producedBatch{offset: offset, value: val}
 }
 
+// createTopicRetry calls CreateTopic, retrying on any error until timeout elapses.
+// Retrying is safe because each test uses a unique topic name, so a duplicate
+// create (if the server applied the proposal but the client timed out) would
+// return AlreadyExists — which this helper also treats as success.
+func createTopicRetry(t *testing.T, ac *client.AdminClient, req client.CreateTopicRequest, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := ac.CreateTopic(ctx, req)
+		cancel()
+		if err == nil {
+			return
+		}
+		lastErr = err
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("CreateTopic %q: %v", req.Name, lastErr)
+}
+
 // checkSequentialOffsets verifies that produced batches have no gaps or duplicates.
 func checkSequentialOffsets(t *testing.T, produced []producedBatch) {
 	t.Helper()
@@ -615,13 +634,11 @@ func TestCluster_LeaderFailover(t *testing.T) {
 	defer ac.Close() //nolint:errcheck
 
 	ctx := context.Background()
-	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+	createTopicRetry(t, ac, client.CreateTopicRequest{
 		Name:              "failover-topic",
 		PartitionCount:    1,
 		ReplicationFactor: 3,
-	}); err != nil {
-		t.Fatalf("CreateTopic: %v", err)
-	}
+	}, 30*time.Second)
 	waitPartitionsLeaders(t, adminAddr, "failover-topic", 1, 15*time.Second)
 
 	leaderIdx, survivorMgmtAddr := findLeaderIdx(t, ac, "failover-topic", nodes)
@@ -716,13 +733,11 @@ func TestCluster_LeaderFailover_FetchDuringElection(t *testing.T) {
 	defer ac.Close() //nolint:errcheck
 
 	ctx := context.Background()
-	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+	createTopicRetry(t, ac, client.CreateTopicRequest{
 		Name:              "failover-fetch-topic",
 		PartitionCount:    1,
 		ReplicationFactor: 3,
-	}); err != nil {
-		t.Fatalf("CreateTopic: %v", err)
-	}
+	}, 30*time.Second)
 	waitPartitionsLeaders(t, adminAddr, "failover-fetch-topic", 1, 15*time.Second)
 
 	leaderIdx, survivorMgmtAddr := findLeaderIdx(t, ac, "failover-fetch-topic", nodes)
@@ -883,13 +898,11 @@ func TestGroup_TwoConsumers_RangeAssignment(t *testing.T) {
 	defer ac.Close() //nolint:errcheck
 
 	ctx := context.Background()
-	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+	createTopicRetry(t, ac, client.CreateTopicRequest{
 		Name:              "group-topic",
 		PartitionCount:    4,
 		ReplicationFactor: 3,
-	}); err != nil {
-		t.Fatalf("CreateTopic: %v", err)
-	}
+	}, 30*time.Second)
 	waitPartitionsLeaders(t, adminAddr, "group-topic", 4, 15*time.Second)
 
 	bootstrapAddrs := clusterBootstrapAddrs(nodes)
@@ -1011,13 +1024,11 @@ func TestGroup_VoluntaryLeave_TriggersRebalance(t *testing.T) {
 	defer ac.Close() //nolint:errcheck
 
 	ctx := context.Background()
-	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+	createTopicRetry(t, ac, client.CreateTopicRequest{
 		Name:              "leave-topic",
 		PartitionCount:    3,
 		ReplicationFactor: 3,
-	}); err != nil {
-		t.Fatalf("CreateTopic: %v", err)
-	}
+	}, 30*time.Second)
 	waitPartitionsLeaders(t, adminAddr, "leave-topic", 3, 15*time.Second)
 
 	bootstrapAddrs := clusterBootstrapAddrs(nodes)
@@ -1178,13 +1189,11 @@ func TestGroup_SessionTimeout_EvictsMember(t *testing.T) {
 	defer ac.Close() //nolint:errcheck
 
 	ctx := context.Background()
-	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+	createTopicRetry(t, ac, client.CreateTopicRequest{
 		Name:              "timeout-topic",
 		PartitionCount:    nPartitions,
 		ReplicationFactor: 3,
-	}); err != nil {
-		t.Fatalf("CreateTopic: %v", err)
-	}
+	}, 30*time.Second)
 	waitPartitionsLeaders(t, adminAddr, "timeout-topic", nPartitions, 15*time.Second)
 
 	bootstrapAddrs := clusterBootstrapAddrs(nodes)
@@ -1315,13 +1324,11 @@ func TestGroup_OffsetCommit_SurvivesRestart(t *testing.T) {
 	defer ac.Close() //nolint:errcheck
 
 	ctx := context.Background()
-	if _, err = ac.CreateTopic(ctx, client.CreateTopicRequest{
+	createTopicRetry(t, ac, client.CreateTopicRequest{
 		Name:              "offset-topic",
 		PartitionCount:    1,
 		ReplicationFactor: 3,
-	}); err != nil {
-		t.Fatalf("CreateTopic: %v", err)
-	}
+	}, 30*time.Second)
 	waitPartitionsLeaders(t, adminAddr, "offset-topic", 1, 15*time.Second)
 
 	bootstrapAddrs := clusterBootstrapAddrs(nodes)
