@@ -5,19 +5,38 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"time"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// MetadataFSMMetrics holds pre-labeled Prometheus observers for a single metadata shard.
+// All fields may be nil; nil fields are silently skipped.
+type MetadataFSMMetrics struct {
+	FSMUpdateDuration       prometheus.Observer
+	SnapshotSaveDuration    prometheus.Observer
+	SnapshotRecoverDuration prometheus.Observer
+	CommittedIndex          prometheus.Gauge
+	AppliedIndex            prometheus.Gauge
+}
 
 // MetadataFSM implements dragonboat's IStateMachine for the cluster metadata shard.
 // It maintains in-memory state for topics, partitions, nodes, and consumer groups.
 type MetadataFSM struct {
-	state *MetadataState
+	state   *MetadataState
+	metrics *MetadataFSMMetrics
 }
 
 var _ sm.IStateMachine = (*MetadataFSM)(nil)
 
-func NewMetadataFSM() *MetadataFSM {
+// NewMetadataFSM creates a MetadataFSM. Pass an optional *MetadataFSMMetrics to
+// enable per-shard observability; nil disables all metric recording.
+func NewMetadataFSM(m ...*MetadataFSMMetrics) *MetadataFSM {
+	var mtrx *MetadataFSMMetrics
+	if len(m) > 0 {
+		mtrx = m[0]
+	}
 	return &MetadataFSM{
 		state: &MetadataState{
 			Topics:      make(map[string]*TopicMeta),
@@ -27,15 +46,36 @@ func NewMetadataFSM() *MetadataFSM {
 			GroupStates: make(map[string]*GroupState),
 			NextShardID: 1,
 		},
+		metrics: mtrx,
 	}
 }
 
 func (fsm *MetadataFSM) Update(e sm.Entry) (sm.Result, error) {
+	start := time.Now()
 	var cmd MetadataCommand
 	if err := json.Unmarshal(e.Cmd, &cmd); err != nil {
+		if m := fsm.metrics; m != nil {
+			if m.FSMUpdateDuration != nil {
+				m.FSMUpdateDuration.Observe(time.Since(start).Seconds())
+			}
+		}
 		return ErrorResult(ResultErrInvalidArg, "invalid command JSON"), nil
 	}
-	return fsm.applyCommand(&cmd), nil
+	result := fsm.applyCommand(&cmd)
+	if m := fsm.metrics; m != nil {
+		elapsed := time.Since(start).Seconds()
+		if m.FSMUpdateDuration != nil {
+			m.FSMUpdateDuration.Observe(elapsed)
+		}
+		idx := float64(e.Index)
+		if m.CommittedIndex != nil {
+			m.CommittedIndex.Set(idx)
+		}
+		if m.AppliedIndex != nil {
+			m.AppliedIndex.Set(idx)
+		}
+	}
+	return result, nil
 }
 
 func (fsm *MetadataFSM) applyCommand(cmd *MetadataCommand) sm.Result {
@@ -554,7 +594,12 @@ func (fsm *MetadataFSM) SaveSnapshot(w io.Writer, _ sm.ISnapshotFileCollection, 
 		return sm.ErrSnapshotStopped
 	default:
 	}
-	return json.NewEncoder(w).Encode(fsm.state)
+	start := time.Now()
+	err := json.NewEncoder(w).Encode(fsm.state)
+	if m := fsm.metrics; m != nil && m.SnapshotSaveDuration != nil {
+		m.SnapshotSaveDuration.Observe(time.Since(start).Seconds())
+	}
+	return err
 }
 
 func (fsm *MetadataFSM) RecoverFromSnapshot(r io.Reader, _ []sm.SnapshotFile, done <-chan struct{}) error {
@@ -563,6 +608,7 @@ func (fsm *MetadataFSM) RecoverFromSnapshot(r io.Reader, _ []sm.SnapshotFile, do
 		return sm.ErrSnapshotStopped
 	default:
 	}
+	start := time.Now()
 	s := &MetadataState{}
 	if err := json.NewDecoder(r).Decode(s); err != nil {
 		return err
@@ -571,6 +617,9 @@ func (fsm *MetadataFSM) RecoverFromSnapshot(r io.Reader, _ []sm.SnapshotFile, do
 		s.GroupStates = make(map[string]*GroupState)
 	}
 	fsm.state = s
+	if m := fsm.metrics; m != nil && m.SnapshotRecoverDuration != nil {
+		m.SnapshotRecoverDuration.Observe(time.Since(start).Seconds())
+	}
 	return nil
 }
 

@@ -3,6 +3,7 @@ package raft
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	dragonboat "github.com/lni/dragonboat/v4"
@@ -10,6 +11,7 @@ import (
 	dbconfig "github.com/lni/dragonboat/v4/config"
 	sm "github.com/lni/dragonboat/v4/statemachine"
 
+	cmetrics "github.com/bunnymq/bunnymq/internal/cluster"
 	"github.com/bunnymq/bunnymq/internal/metadata"
 	"github.com/bunnymq/bunnymq/internal/partition"
 )
@@ -44,8 +46,9 @@ type nodeHostIface interface {
 // Host wraps dragonboat's NodeHost and exposes typed helpers for metadata and
 // partition shard operations. Other modules never import dragonboat directly.
 type Host struct {
-	nh     nodeHostIface
-	config *Config
+	nh      nodeHostIface
+	config  *Config
+	metrics *cmetrics.RaftMetrics
 }
 
 // NewHost creates a Host by initialising a dragonboat NodeHost with the given config.
@@ -142,14 +145,23 @@ func (h *Host) SyncProposePartition(ctx context.Context, shardID uint64, cmd par
 		ctx, cancel = context.WithTimeout(ctx, defaultProposeTimeout)
 		defer cancel()
 	}
+	start := time.Now()
 	session := h.nh.GetNoOPSession(shardID)
-	return h.nh.SyncPropose(ctx, session, cmd.Marshal())
+	result, err := h.nh.SyncPropose(ctx, session, cmd.Marshal())
+	if m := h.metrics; m != nil && m.ProposeDuration != nil {
+		m.ProposeDuration.WithLabelValues(strconv.FormatUint(shardID, 10), "all").Observe(time.Since(start).Seconds())
+	}
+	return result, err
 }
 
 // ProposePartition proposes a partition command with acks=0 (fire and forget).
 func (h *Host) ProposePartition(ctx context.Context, shardID uint64, cmd partition.PartitionCommand) error {
+	start := time.Now()
 	session := h.nh.GetNoOPSession(shardID)
 	rs, err := h.nh.Propose(session, cmd.Marshal(), proposeTimeout(ctx))
+	if m := h.metrics; m != nil && m.ProposeDuration != nil {
+		m.ProposeDuration.WithLabelValues(strconv.FormatUint(shardID, 10), "zero").Observe(time.Since(start).Seconds())
+	}
 	if err != nil {
 		return err
 	}

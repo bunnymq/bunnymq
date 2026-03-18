@@ -12,15 +12,20 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"go.uber.org/zap"
 
+	cmetrics "github.com/bunnymq/bunnymq/internal/cluster"
 	"github.com/bunnymq/bunnymq/internal/metadata"
 	"github.com/bunnymq/bunnymq/internal/partition"
 )
+
+// metadataShardLabel is the shard_id label value for the metadata shard (shard 0).
+const metadataShardLabel = "0"
 
 var (
 	ErrInvalidArgument    = errors.New("invalid argument")
@@ -123,6 +128,7 @@ type ClusterCoordinator struct {
 	config          CoordinatorConfig
 	raftHost        raftHostIface
 	dataCoord       DataCoordinatorIface
+	metrics         *cmetrics.RaftMetrics
 	shardMu         sync.RWMutex
 	runningShards   map[uint64]shardInfo
 	leaderMu        sync.Mutex
@@ -131,15 +137,40 @@ type ClusterCoordinator struct {
 }
 
 // NewClusterCoordinator creates a new ClusterCoordinator.
-func NewClusterCoordinator(cfg CoordinatorConfig, host raftHostIface, dataCoord DataCoordinatorIface, logger *zap.Logger) *ClusterCoordinator {
+// m may be nil; in that case NoopRaftMetrics is used so nil checks are unnecessary.
+func NewClusterCoordinator(cfg CoordinatorConfig, host raftHostIface, dataCoord DataCoordinatorIface, m *cmetrics.RaftMetrics, logger *zap.Logger) *ClusterCoordinator {
+	if m == nil {
+		m = cmetrics.NoopRaftMetrics()
+	}
 	return &ClusterCoordinator{
 		config:          cfg,
 		raftHost:        host,
 		dataCoord:       dataCoord,
+		metrics:         m,
 		runningShards:   make(map[uint64]shardInfo),
 		lastKnownLeader: make(map[uint64]leaderRecord),
 		logger:          logger,
 	}
+}
+
+// syncProposeMetadata wraps SyncProposeMetadata with ProposeDuration{acks="all"} timing.
+func (cc *ClusterCoordinator) syncProposeMetadata(ctx context.Context, cmd metadata.MetadataCommand) (sm.Result, error) {
+	start := time.Now()
+	result, err := cc.raftHost.SyncProposeMetadata(ctx, cmd)
+	if m := cc.metrics; m != nil && m.ProposeDuration != nil {
+		m.ProposeDuration.WithLabelValues(metadataShardLabel, "all").Observe(time.Since(start).Seconds())
+	}
+	return result, err
+}
+
+// proposePartition wraps ProposePartition with ProposeDuration{acks="zero"} timing.
+func (cc *ClusterCoordinator) proposePartition(ctx context.Context, shardID uint64, cmd partition.PartitionCommand) error {
+	start := time.Now()
+	err := cc.raftHost.ProposePartition(ctx, shardID, cmd)
+	if m := cc.metrics; m != nil && m.ProposeDuration != nil {
+		m.ProposeDuration.WithLabelValues(strconv.FormatUint(shardID, 10), "zero").Observe(time.Since(start).Seconds())
+	}
+	return err
 }
 
 // Bootstrap starts the metadata shard, waits for leader election, registers this
@@ -147,8 +178,9 @@ func NewClusterCoordinator(cfg CoordinatorConfig, host raftHostIface, dataCoord 
 func (cc *ClusterCoordinator) Bootstrap(ctx context.Context) error {
 	// Step 1 — start metadata shard.
 	// VERIFY: join=false for a fresh cluster; join=true when rejoining.
+	mFSM := metadataFSMMetrics(cc.metrics, metadataShardLabel)
 	factory := func(_ uint64, _ uint64) sm.IStateMachine {
-		return metadata.NewMetadataFSM()
+		return metadata.NewMetadataFSM(mFSM)
 	}
 	if err := cc.raftHost.StartMetadataShard(cc.config.Peers, false, factory); err != nil {
 		return fmt.Errorf("start metadata shard: %w", err)
@@ -189,7 +221,7 @@ func (cc *ClusterCoordinator) Bootstrap(ctx context.Context) error {
 	}
 	var regErr error
 	for {
-		_, regErr = cc.raftHost.SyncProposeMetadata(ctx, regCmd)
+		_, regErr = cc.syncProposeMetadata(ctx, regCmd)
 		if regErr == nil {
 			break
 		}
@@ -264,7 +296,7 @@ func (cc *ClusterCoordinator) CreateTopic(
 		CreatedAtMs:       time.Now().UnixMilli(),
 		ReplicaNodeIDs:    replicaNodeIDs,
 	}
-	result, err := cc.raftHost.SyncProposeMetadata(ctx, metadata.MetadataCommand{
+	result, err := cc.syncProposeMetadata(ctx, metadata.MetadataCommand{
 		Type:        metadata.CmdCreateTopic,
 		CreateTopic: createCmd,
 	})
@@ -307,7 +339,7 @@ func (cc *ClusterCoordinator) DeleteTopic(ctx context.Context, name string) erro
 		return fmt.Errorf("lookup topic: %w", err)
 	}
 
-	_, err = cc.raftHost.SyncProposeMetadata(ctx, metadata.MetadataCommand{
+	_, err = cc.syncProposeMetadata(ctx, metadata.MetadataCommand{
 		Type:        metadata.CmdDeleteTopic,
 		DeleteTopic: &metadata.DeleteTopicCmd{Name: name},
 	})
@@ -402,7 +434,7 @@ func (cc *ClusterCoordinator) AlterTopicPartitionCount(
 		newAssignments[i] = assignReplicas(nodes, name, tm.PartitionCount+i, tm.ReplicationFactor)
 	}
 
-	_, err = cc.raftHost.SyncProposeMetadata(ctx, metadata.MetadataCommand{
+	_, err = cc.syncProposeMetadata(ctx, metadata.MetadataCommand{
 		Type: metadata.CmdAlterTopicPartCount,
 		AlterTopicPartCount: &metadata.AlterTopicPartCountCmd{
 			Name:                  name,
@@ -431,7 +463,7 @@ func (cc *ClusterCoordinator) AlterTopicRetention(
 		return fmt.Errorf("lookup topic: %w", err)
 	}
 
-	if _, err = cc.raftHost.SyncProposeMetadata(ctx, metadata.MetadataCommand{
+	if _, err = cc.syncProposeMetadata(ctx, metadata.MetadataCommand{
 		Type: metadata.CmdAlterTopicRetention,
 		AlterTopicRetention: &metadata.AlterTopicRetentionCmd{
 			Name:           name,
@@ -460,7 +492,7 @@ func (cc *ClusterCoordinator) AlterTopicRetention(
 	for _, pm := range pms {
 		shardID := pm.ShardID
 		go func() {
-			if propErr := cc.raftHost.ProposePartition(context.Background(), shardID, partition.PartitionCommand{
+			if propErr := cc.proposePartition(context.Background(), shardID, partition.PartitionCommand{
 				Type:    partition.CmdRetentionConfig,
 				Payload: payload,
 			}); propErr != nil {
@@ -650,7 +682,7 @@ func (cc *ClusterCoordinator) sweepLeaders(ctx context.Context) {
 		if leaderID == last.nodeID && term == last.term {
 			continue
 		}
-		_, err = cc.raftHost.SyncProposeMetadata(ctx, metadata.MetadataCommand{
+		_, err = cc.syncProposeMetadata(ctx, metadata.MetadataCommand{
 			Type: metadata.CmdAssignPartitionLeader,
 			AssignPartitionLeader: &metadata.AssignPartitionLeaderCmd{
 				Topic:        info.Topic,
@@ -664,6 +696,22 @@ func (cc *ClusterCoordinator) sweepLeaders(ctx context.Context) {
 				zap.String("topic", info.Topic), zap.Int32("partition_id", info.PartitionID),
 				zap.Uint64("leader_id", leaderID), zap.Error(err))
 			continue
+		}
+		shardStr := strconv.FormatUint(shardID, 10)
+		if m := cc.metrics; m != nil {
+			if m.LeaderChangesTotal != nil {
+				m.LeaderChangesTotal.WithLabelValues(shardStr).Inc()
+			}
+			if m.Term != nil {
+				m.Term.WithLabelValues(shardStr).Set(float64(term))
+			}
+			if m.IsLeader != nil {
+				isLeader := float64(0)
+				if leaderID == cc.config.NodeID {
+					isLeader = 1
+				}
+				m.IsLeader.WithLabelValues(shardStr).Set(isLeader)
+			}
 		}
 		cc.leaderMu.Lock()
 		cc.lastKnownLeader[shardID] = leaderRecord{nodeID: leaderID, term: term}
