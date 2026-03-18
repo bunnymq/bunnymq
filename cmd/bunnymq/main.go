@@ -7,10 +7,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"go.uber.org/zap"
 
 	"github.com/bunnymq/bunnymq/internal/api"
@@ -22,7 +25,11 @@ import (
 	"github.com/bunnymq/bunnymq/internal/metadata"
 	"github.com/bunnymq/bunnymq/internal/partition"
 	"github.com/bunnymq/bunnymq/internal/raft"
+	"github.com/bunnymq/bunnymq/internal/storage"
 )
+
+// version is set at build time via -ldflags "-X main.version=v0.1.0".
+var version = "dev"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--health-check" {
@@ -112,7 +119,46 @@ func (bh *brokerHost) SyncProposePartition(ctx context.Context, shardID uint64, 
 	return bh.host.SyncProposePartition(ctx, shardID, cmd)
 }
 
+func startObservability(cfg *config.Config, logger *zap.Logger) (*api.ServerMetrics, *api.MetricsServer, *api.PprofServer, *cmetrics.RaftMetrics, error) {
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(collectors.NewGoCollector())
+	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+
+	serverMetrics := api.NewServerMetrics(reg)
+	_ = storage.NewStorageMetrics(reg) // registers metrics; wiring to storage is handled at partition layer (T-060)
+	raftMetrics := cmetrics.NewRaftMetrics(reg)
+
+	metricsAddr := cfg.MetricsAddr
+	if metricsAddr == "" {
+		metricsAddr = ":9090"
+	}
+	metricsSrv := api.NewMetricsServer(metricsAddr, reg)
+	if err := metricsSrv.Start(); err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("start metrics server %s: %w", metricsAddr, err)
+	}
+	logger.Info("metrics server started", zap.String("metrics_addr", metricsSrv.Addr()))
+
+	var pprofSrv *api.PprofServer
+	if cfg.PprofAddr != "" {
+		ps, pprofErr := api.NewPprofServer(cfg.PprofAddr)
+		if pprofErr != nil {
+			logger.Warn("pprof server rejected", zap.String("addr", cfg.PprofAddr), zap.Error(pprofErr))
+		} else if pprofErr = ps.Start(); pprofErr != nil {
+			return nil, nil, nil, nil, fmt.Errorf("start pprof server %s: %w", cfg.PprofAddr, pprofErr)
+		} else {
+			pprofSrv = ps
+		}
+	}
+
+	return serverMetrics, metricsSrv, pprofSrv, raftMetrics, nil
+}
+
 func run(cfg *config.Config, logger *zap.Logger) error {
+	serverMetrics, metricsSrv, pprofSrv, raftMetrics, err := startObservability(cfg, logger)
+	if err != nil {
+		return err
+	}
+
 	partFactory := func(shardID uint64, _ uint64) sm.IOnDiskStateMachine {
 		dir := filepath.Join(cfg.DataDir, "partitions", fmt.Sprintf("shard-%d", shardID))
 		if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
@@ -151,10 +197,14 @@ func run(cfg *config.Config, logger *zap.Logger) error {
 		ReconcileIntervalMs:    cfg.Coordinator.ReconcileIntervalMs,
 		LeaderCheckIntervalMs:  cfg.Coordinator.LeaderCheckIntervalMs,
 		EagerReconcileOnCreate: cfg.Coordinator.EagerReconcileOnCreate,
-	}, bh, dc, cmetrics.NoopRaftMetrics(), logger.Named("cluster"))
+	}, bh, dc, raftMetrics, logger.Named("cluster"))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	startTime := time.Now()
+	serverMetrics.RecordBuildInfo(version, runtime.Version(), fmt.Sprintf("%d", cfg.NodeID), "")
+	serverMetrics.StartUptimeTicker(ctx, startTime)
 
 	if err := cc.Bootstrap(ctx); err != nil {
 		return fmt.Errorf("bootstrap: %w", err)
@@ -196,6 +246,8 @@ func run(cfg *config.Config, logger *zap.Logger) error {
 		dataAddr = ":9092"
 	}
 
+	serverCfg := api.ServerConfig{AuthTokens: cfg.AuthTokens, Metrics: serverMetrics}
+
 	mgmtLn, err := net.Listen("tcp", mgmtAddr)
 	if err != nil {
 		return fmt.Errorf("listen management %s: %w", mgmtAddr, err)
@@ -206,11 +258,11 @@ func run(cfg *config.Config, logger *zap.Logger) error {
 		return fmt.Errorf("listen data %s: %w", dataAddr, err)
 	}
 
-	mgmtSrv := api.NewManagementServer(api.ServerConfig{Addr: mgmtAddr, AuthTokens: cfg.AuthTokens}, cc, logger.Named("mgmt-api"))
-	dataSrv := api.NewDataServer(api.ServerConfig{Addr: dataAddr, AuthTokens: cfg.AuthTokens}, dc, gc, isMetadataLeader, logger.Named("data-api"))
+	mgmtSrv := api.NewManagementServer(serverCfg, cc, logger.Named("mgmt-api"))
+	dataSrv := api.NewDataServer(serverCfg, dc, gc, isMetadataLeader, logger.Named("data-api"))
 
-	go mgmtSrv.Serve(mgmtLn)  //nolint:errcheck
-	go dataSrv.Serve(dataLn)  //nolint:errcheck
+	go mgmtSrv.Serve(mgmtLn) //nolint:errcheck
+	go dataSrv.Serve(dataLn) //nolint:errcheck
 
 	logger.Info("broker ready",
 		zap.Uint64("node_id", cfg.NodeID),
@@ -223,6 +275,17 @@ func run(cfg *config.Config, logger *zap.Logger) error {
 
 	mgmtSrv.GracefulStop()
 	dataSrv.GracefulStop()
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopCancel()
+	if err := metricsSrv.Stop(stopCtx); err != nil {
+		logger.Warn("metrics server shutdown error", zap.Error(err))
+	}
+	if pprofSrv != nil {
+		if err := pprofSrv.Stop(stopCtx); err != nil {
+			logger.Warn("pprof server shutdown error", zap.Error(err))
+		}
+	}
 
 	return nil
 }

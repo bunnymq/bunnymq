@@ -20,6 +20,7 @@ type ServerConfig struct {
 	Addr       string
 	AuthTokens []string
 	TLSConfig  *tls.Config
+	Metrics    *ServerMetrics
 }
 
 // NewManagementServer builds a grpc.Server for the Management API.
@@ -37,11 +38,15 @@ func NewDataServer(config ServerConfig, dc *data.DataCoordinator, gc apidata.Gro
 }
 
 func serverOptions(config ServerConfig, logger *zap.Logger) []grpc.ServerOption {
+	unary := []grpc.UnaryServerInterceptor{
+		auth.UnaryInterceptor(config.AuthTokens, logger),
+		logging.UnaryInterceptor(logger),
+	}
+	if config.Metrics != nil {
+		unary = append(unary, ServerMetricsInterceptor(config.Metrics))
+	}
 	opts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(
-			auth.UnaryInterceptor(config.AuthTokens, logger),
-			logging.UnaryInterceptor(logger),
-		),
+		grpc.ChainUnaryInterceptor(unary...),
 		grpc.ChainStreamInterceptor(
 			auth.StreamInterceptor(config.AuthTokens, logger),
 			logging.StreamInterceptor(logger),

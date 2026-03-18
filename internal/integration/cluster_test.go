@@ -61,6 +61,7 @@ type brokerCfgFile struct {
 	Peers          map[string]string `json:"peers"`
 	Storage        brokerStorage     `json:"storage"`
 	Coordinator    brokerCoord       `json:"coordinator"`
+	MetricsAddr    string            `json:"metricsaddr"`
 }
 
 type brokerStorage struct {
@@ -94,6 +95,7 @@ func startBroker(t *testing.T, nodeID uint64, raftPort, mgmtPort, dataPort int, 
 		DataDir:        dataDir,
 		RaftRTTMs:      10,
 		Peers:          peerMap,
+		MetricsAddr:    fmt.Sprintf("localhost:%d", mgmtPort-1),
 		Storage: brokerStorage{
 			SegmentMaxBytes:  128 * 1024 * 1024,
 			IndexSampleBytes: 4096,
@@ -149,6 +151,7 @@ func startBrokerSweep(t *testing.T, nodeID uint64, raftPort, mgmtPort, dataPort 
 		DataDir:        dataDir,
 		RaftRTTMs:      10,
 		Peers:          peerMap,
+		MetricsAddr:    fmt.Sprintf("localhost:%d", mgmtPort-1),
 		Storage: brokerStorage{
 			SegmentMaxBytes:  128 * 1024 * 1024,
 			IndexSampleBytes: 4096,
