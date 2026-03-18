@@ -22,6 +22,8 @@ type rawConfig struct {
 	AuthTokens     []string          `mapstructure:"authtokens"`
 	Storage        StorageConfig     `mapstructure:"storage"`
 	Coordinator    CoordinatorConfig `mapstructure:"coordinator"`
+	MetricsAddr    string            `mapstructure:"metricsaddr"`
+	PprofAddr      string            `mapstructure:"pprofaddr"`
 }
 
 // Load reads broker configuration from a file and returns a Config.
@@ -56,6 +58,8 @@ func Load(path string) (*Config, error) {
 		AuthTokens:     raw.AuthTokens,
 		Storage:        raw.Storage,
 		Coordinator:    raw.Coordinator,
+		MetricsAddr:    raw.MetricsAddr,
+		PprofAddr:      raw.PprofAddr,
 	}, nil
 }
 
@@ -71,6 +75,8 @@ type Config struct {
 	AuthTokens     []string
 	Storage        StorageConfig
 	Coordinator    CoordinatorConfig
+	MetricsAddr    string
+	PprofAddr      string
 }
 
 // StorageConfig holds per-partition storage configuration.
