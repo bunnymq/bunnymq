@@ -86,4 +86,5 @@ type CoordinatorConfig struct {
 	LeaderCheckIntervalMs  int64
 	BootstrapTimeoutMs     int64
 	EagerReconcileOnCreate bool
+	GroupSweepIntervalMs   int64
 }

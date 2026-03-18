@@ -172,8 +172,8 @@ func TestMetadataFSM_LeaveGroup(t *testing.T) {
 }
 
 // TestMetadataFSM_LeaveGroup_LastMember verifies that when the last member
-// leaves, the group is deleted from GroupStates (rather than kept empty).
-// This behaviour is documented here: empty groups are not retained in the FSM.
+// leaves, the group is retained in GroupStates with no members and no assignments
+// so that committed offsets survive for the next consumer that joins.
 func TestMetadataFSM_LeaveGroup_LastMember(t *testing.T) {
 	fsm := NewMetadataFSM()
 
@@ -184,8 +184,14 @@ func TestMetadataFSM_LeaveGroup_LastMember(t *testing.T) {
 	leaveGroupState(t, fsm, "g1", "m1", "Voluntary", map[string][]TopicPartition{})
 
 	gs := getGroupState(t, fsm, "g1")
-	if gs != nil {
-		t.Errorf("expected group to be deleted after last member leaves, got %+v", gs)
+	if gs == nil {
+		t.Fatal("expected group to be retained after last member leaves (to preserve committed offsets)")
+	}
+	if len(gs.Members) != 0 {
+		t.Errorf("expected no members after last member leaves, got %d", len(gs.Members))
+	}
+	if len(gs.Assignments) != 0 {
+		t.Errorf("expected empty assignments after last member leaves, got %d", len(gs.Assignments))
 	}
 }
 

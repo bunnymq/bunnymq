@@ -23,6 +23,7 @@ type ConsumerConfig struct {
 	MaxFetchWaitMs      int64
 	AutoOffsetReset     OffsetResetPolicy
 	HeartbeatIntervalMs int64
+	SessionTimeoutMs    int32
 }
 
 // Consumer reads messages from BunnyMQ topics.
@@ -172,9 +173,11 @@ func (c *Consumer) doJoinGroup(ctx context.Context, topics []string) (*pb.JoinGr
 	}
 	callCtx, cancel := context.WithTimeout(ctx, c.config.RequestTimeout)
 	resp, err := pb.NewDataServiceClient(conn).JoinGroup(callCtx, &pb.JoinGroupRequest{
-		GroupId:          c.config.GroupID,
-		MemberId:         memberID,
-		SubscribedTopics: topics,
+		GroupId:             c.config.GroupID,
+		MemberId:            memberID,
+		SubscribedTopics:    topics,
+		SessionTimeoutMs:    c.config.SessionTimeoutMs,
+		HeartbeatIntervalMs: int32(c.config.HeartbeatIntervalMs),
 	})
 	cancel()
 	return resp, err
@@ -424,6 +427,15 @@ func (c *Consumer) CommitOffsets(ctx context.Context, offsets map[TP]int64) erro
 		return err
 	}
 	return nil
+}
+
+// SimulateCrash stops the heartbeat and closes connections without sending LeaveGroup.
+// Mimics a hard process kill for use in integration tests.
+func (c *Consumer) SimulateCrash() {
+	if c.stopHeartbeat != nil {
+		c.stopHeartbeat()
+	}
+	c.pool.Close() //nolint:errcheck
 }
 
 // Close stops the heartbeat goroutine, sends LeaveGroup, and releases all connections.

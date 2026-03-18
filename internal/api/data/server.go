@@ -94,12 +94,20 @@ func (s *Server) JoinGroup(ctx context.Context, req *pb.JoinGroupRequest) (*pb.J
 	if isLeader, leaderAddr := s.isMetadataLeader(); !isLeader {
 		return nil, notLeaderStatus(leaderAddr)
 	}
+	sessionTimeoutMs := req.GetSessionTimeoutMs()
+	if sessionTimeoutMs == 0 {
+		sessionTimeoutMs = defaultSessionTimeoutMs
+	}
+	heartbeatIntervalMs := req.GetHeartbeatIntervalMs()
+	if heartbeatIntervalMs == 0 {
+		heartbeatIntervalMs = defaultHeartbeatIntervalMs
+	}
 	resp, err := s.groupCoord.JoinGroup(ctx, coordgroup.JoinGroupRequest{
 		GroupID:             req.GetGroupId(),
 		MemberID:            req.GetMemberId(),
 		Topics:              req.GetSubscribedTopics(),
-		SessionTimeoutMs:    defaultSessionTimeoutMs,
-		HeartbeatIntervalMs: defaultHeartbeatIntervalMs,
+		SessionTimeoutMs:    sessionTimeoutMs,
+		HeartbeatIntervalMs: heartbeatIntervalMs,
 	})
 	if err != nil {
 		return nil, mapGroupError(err)
