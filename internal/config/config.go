@@ -99,7 +99,8 @@ type CoordinatorConfig struct {
 
 // LoadFromEnv builds a Config from environment variables. Required vars:
 // NODE_ID, RAFT_ADDR, DATA_DIR, INITIAL_MEMBERS.
-// Optional: MGMT_ADDR (default :9091), DATA_ADDR (default :9092), RAFT_RTT_MS (default 200).
+// Optional: MGMT_ADDR (default :9091), DATA_ADDR (default :9092), RAFT_RTT_MS (default 200),
+// GROUP_SWEEP_INTERVAL_MS, RETENTION_CHECK_INTERVAL_MS.
 func LoadFromEnv() (*Config, error) {
 	nodeID, err := strconv.ParseUint(os.Getenv("NODE_ID"), 10, 64)
 	if err != nil {
@@ -127,6 +128,24 @@ func LoadFromEnv() (*Config, error) {
 		dataAddr = ":9092"
 	}
 
+	var groupSweepIntervalMs int64
+	if raw := os.Getenv("GROUP_SWEEP_INTERVAL_MS"); raw != "" {
+		v, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil {
+			return nil, fmt.Errorf("GROUP_SWEEP_INTERVAL_MS: %w", parseErr)
+		}
+		groupSweepIntervalMs = v
+	}
+
+	var retentionCheckIntervalMs int64
+	if raw := os.Getenv("RETENTION_CHECK_INTERVAL_MS"); raw != "" {
+		v, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil {
+			return nil, fmt.Errorf("RETENTION_CHECK_INTERVAL_MS: %w", parseErr)
+		}
+		retentionCheckIntervalMs = v
+	}
+
 	return &Config{
 		NodeID:         nodeID,
 		RaftAddress:    os.Getenv("RAFT_ADDR"),
@@ -135,6 +154,12 @@ func LoadFromEnv() (*Config, error) {
 		DataDir:        os.Getenv("DATA_DIR"),
 		RaftRTTMs:      rttMs,
 		Peers:          peers,
+		Coordinator: CoordinatorConfig{
+			GroupSweepIntervalMs: groupSweepIntervalMs,
+		},
+		Storage: StorageConfig{
+			RetentionCheckIntervalMs: retentionCheckIntervalMs,
+		},
 	}, nil
 }
 
