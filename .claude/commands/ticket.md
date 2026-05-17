@@ -92,11 +92,11 @@ All integration tests must pass before opening the PR. Do not skip this step eve
 Stage and commit all new and modified files:
 ```
 git add <files listed in Scope>
-git commit -m "T-$ARGUMENTS: <ticket title>
+git commit \
+  --author="sunnyyssh <110637846+sunnyyssh@users.noreply.github.com>" \
+  -m "T-$ARGUMENTS: <ticket title>
 
-<one-sentence summary of what was implemented>
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+<one-sentence summary of what was implemented>"
 ```
 
 Do not use `git add -A` or `git add .` — add files explicitly by name to avoid committing generated artifacts or IDE files.
