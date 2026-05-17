@@ -40,6 +40,7 @@ type CoordinatorConfig struct {
 	NodeID                 uint64
 	RaftAddress            string
 	DataAddr               string
+	AdvertiseDataAddr      string
 	DataDir                string
 	Peers                  map[uint64]string
 	BootstrapTimeoutMs     int64
@@ -208,7 +209,10 @@ func (cc *ClusterCoordinator) Bootstrap(ctx context.Context) error {
 	// look up the leader's gRPC endpoint via DescribeCluster/DescribeTopic.
 	// Retry within the bootstrap deadline: a transient leader change between
 	// steps 2 and 3 would otherwise cause a permanent bootstrap failure.
-	regAddr := cc.config.DataAddr
+	regAddr := cc.config.AdvertiseDataAddr
+	if regAddr == "" {
+		regAddr = cc.config.DataAddr
+	}
 	if regAddr == "" {
 		regAddr = cc.config.RaftAddress
 	}

@@ -195,6 +195,7 @@ func run(cfg *config.Config, logger *zap.Logger) error {
 		NodeID:                 cfg.NodeID,
 		RaftAddress:            cfg.RaftAddress,
 		DataAddr:               cfg.DataAddr,
+		AdvertiseDataAddr:      cfg.AdvertiseDataAddr,
 		DataDir:                cfg.DataDir,
 		Peers:                  cfg.Peers,
 		BootstrapTimeoutMs:     cfg.Coordinator.BootstrapTimeoutMs,

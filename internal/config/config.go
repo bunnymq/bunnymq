@@ -65,18 +65,19 @@ func Load(path string) (*Config, error) {
 
 // Config holds the broker configuration loaded from a YAML/TOML file and CLI flags.
 type Config struct {
-	NodeID         uint64
-	RaftAddress    string
-	ManagementAddr string
-	DataAddr       string
-	DataDir        string
-	RaftRTTMs      uint64
-	Peers          map[uint64]string
-	AuthTokens     []string
-	Storage        StorageConfig
-	Coordinator    CoordinatorConfig
-	MetricsAddr    string
-	PprofAddr      string
+	NodeID              uint64
+	RaftAddress         string
+	ManagementAddr      string
+	DataAddr            string
+	AdvertiseDataAddr   string
+	DataDir             string
+	RaftRTTMs           uint64
+	Peers               map[uint64]string
+	AuthTokens          []string
+	Storage             StorageConfig
+	Coordinator         CoordinatorConfig
+	MetricsAddr         string
+	PprofAddr           string
 }
 
 // StorageConfig holds per-partition storage configuration.
@@ -127,6 +128,10 @@ func LoadFromEnv() (*Config, error) {
 	if dataAddr == "" {
 		dataAddr = ":9092"
 	}
+	advertiseDataAddr := os.Getenv("ADVERTISE_DATA_ADDR")
+	if advertiseDataAddr == "" {
+		advertiseDataAddr = dataAddr
+	}
 
 	var groupSweepIntervalMs int64
 	if raw := os.Getenv("GROUP_SWEEP_INTERVAL_MS"); raw != "" {
@@ -146,19 +151,70 @@ func LoadFromEnv() (*Config, error) {
 		retentionCheckIntervalMs = v
 	}
 
+	segmentMaxBytes := int64(128 * 1024 * 1024)
+	if raw := os.Getenv("SEGMENT_MAX_BYTES"); raw != "" {
+		v, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil {
+			return nil, fmt.Errorf("SEGMENT_MAX_BYTES: %w", parseErr)
+		}
+		segmentMaxBytes = v
+	}
+
+	indexSampleBytes := 4096
+	if raw := os.Getenv("INDEX_SAMPLE_BYTES"); raw != "" {
+		v, parseErr := strconv.Atoi(raw)
+		if parseErr != nil {
+			return nil, fmt.Errorf("INDEX_SAMPLE_BYTES: %w", parseErr)
+		}
+		indexSampleBytes = v
+	}
+
+	bootstrapTimeoutMs := int64(30_000)
+	if raw := os.Getenv("BOOTSTRAP_TIMEOUT_MS"); raw != "" {
+		v, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil {
+			return nil, fmt.Errorf("BOOTSTRAP_TIMEOUT_MS: %w", parseErr)
+		}
+		bootstrapTimeoutMs = v
+	}
+
+	reconcileIntervalMs := int64(500)
+	if raw := os.Getenv("RECONCILE_INTERVAL_MS"); raw != "" {
+		v, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil {
+			return nil, fmt.Errorf("RECONCILE_INTERVAL_MS: %w", parseErr)
+		}
+		reconcileIntervalMs = v
+	}
+
+	leaderCheckIntervalMs := int64(1000)
+	if raw := os.Getenv("LEADER_CHECK_INTERVAL_MS"); raw != "" {
+		v, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil {
+			return nil, fmt.Errorf("LEADER_CHECK_INTERVAL_MS: %w", parseErr)
+		}
+		leaderCheckIntervalMs = v
+	}
+
 	return &Config{
-		NodeID:         nodeID,
-		RaftAddress:    os.Getenv("RAFT_ADDR"),
-		ManagementAddr: mgmtAddr,
-		DataAddr:       dataAddr,
-		DataDir:        os.Getenv("DATA_DIR"),
+		NodeID:            nodeID,
+		RaftAddress:       os.Getenv("RAFT_ADDR"),
+		ManagementAddr:    mgmtAddr,
+		DataAddr:          dataAddr,
+		AdvertiseDataAddr: advertiseDataAddr,
+		DataDir:           os.Getenv("DATA_DIR"),
 		RaftRTTMs:      rttMs,
 		Peers:          peers,
 		Coordinator: CoordinatorConfig{
-			GroupSweepIntervalMs: groupSweepIntervalMs,
+			GroupSweepIntervalMs:  groupSweepIntervalMs,
+			BootstrapTimeoutMs:    bootstrapTimeoutMs,
+			ReconcileIntervalMs:   reconcileIntervalMs,
+			LeaderCheckIntervalMs: leaderCheckIntervalMs,
 		},
 		Storage: StorageConfig{
 			RetentionCheckIntervalMs: retentionCheckIntervalMs,
+			SegmentMaxBytes:          segmentMaxBytes,
+			IndexSampleBytes:         indexSampleBytes,
 		},
 	}, nil
 }
