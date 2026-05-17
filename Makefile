@@ -1,4 +1,4 @@
-.PHONY: all build test integration-test integration-test-local lint proto clean docker-build cluster-up cluster-down cluster-logs
+.PHONY: all build test integration-test integration-test-local test-integration lint proto clean docker-build cluster-up cluster-down cluster-logs
 
 GOLANGCI_LINT_VERSION ?= v2.11.3
 
@@ -13,7 +13,9 @@ test:
 integration-test:
 	bash scripts/run-integration-tests.sh
 
-integration-test-local:
+integration-test-local: test-integration
+
+test-integration:
 	go test -tags integration -timeout 180s ./internal/integration/...
 
 lint:
