@@ -1,8 +1,9 @@
 FROM golang:1.25-alpine AS builder
 WORKDIR /build
 COPY . .
-RUN CGO_ENABLED=0 go build -o /bunnymq ./cmd/bunnymq
+RUN CGO_ENABLED=0 go build -o /bunnymq ./cmd/bunnymq && mkdir /data
 
 FROM gcr.io/distroless/static:nonroot
 COPY --from=builder /bunnymq /bunnymq
+COPY --from=builder --chown=nonroot:nonroot /data /data
 ENTRYPOINT ["/bunnymq"]

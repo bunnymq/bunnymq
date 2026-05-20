@@ -65,18 +65,19 @@ func Load(path string) (*Config, error) {
 
 // Config holds the broker configuration loaded from a YAML/TOML file and CLI flags.
 type Config struct {
-	NodeID         uint64
-	RaftAddress    string
-	ManagementAddr string
-	DataAddr       string
-	DataDir        string
-	RaftRTTMs      uint64
-	Peers          map[uint64]string
-	AuthTokens     []string
-	Storage        StorageConfig
-	Coordinator    CoordinatorConfig
-	MetricsAddr    string
-	PprofAddr      string
+	NodeID              uint64
+	RaftAddress         string
+	ManagementAddr      string
+	DataAddr            string
+	AdvertiseDataAddr   string
+	DataDir             string
+	RaftRTTMs           uint64
+	Peers               map[uint64]string
+	AuthTokens          []string
+	Storage             StorageConfig
+	Coordinator         CoordinatorConfig
+	MetricsAddr         string
+	PprofAddr           string
 }
 
 // StorageConfig holds per-partition storage configuration.
@@ -97,10 +98,45 @@ type CoordinatorConfig struct {
 	GroupSweepIntervalMs   int64
 }
 
+// envInt64 reads key from the environment; returns def if unset, or an error if the value is not a valid int64.
+func envInt64(key string, def int64) (int64, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def, nil
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return v, nil
+}
+
+// envInt reads key from the environment; returns def if unset, or an error if the value is not a valid int.
+func envInt(key string, def int) (int, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def, nil
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return v, nil
+}
+
+// envStr reads key from the environment, returning def if unset.
+func envStr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
 // LoadFromEnv builds a Config from environment variables. Required vars:
 // NODE_ID, RAFT_ADDR, DATA_DIR, INITIAL_MEMBERS.
 // Optional: MGMT_ADDR (default :9091), DATA_ADDR (default :9092), RAFT_RTT_MS (default 200),
-// GROUP_SWEEP_INTERVAL_MS, RETENTION_CHECK_INTERVAL_MS.
+// GROUP_SWEEP_INTERVAL_MS, RETENTION_CHECK_INTERVAL_MS, SEGMENT_MAX_BYTES, INDEX_SAMPLE_BYTES,
+// BOOTSTRAP_TIMEOUT_MS, RECONCILE_INTERVAL_MS, LEADER_CHECK_INTERVAL_MS, ADVERTISE_DATA_ADDR.
 func LoadFromEnv() (*Config, error) {
 	nodeID, err := strconv.ParseUint(os.Getenv("NODE_ID"), 10, 64)
 	if err != nil {
@@ -119,46 +155,56 @@ func LoadFromEnv() (*Config, error) {
 		}
 	}
 
-	mgmtAddr := os.Getenv("MGMT_ADDR")
-	if mgmtAddr == "" {
-		mgmtAddr = ":9091"
-	}
-	dataAddr := os.Getenv("DATA_ADDR")
-	if dataAddr == "" {
-		dataAddr = ":9092"
-	}
+	dataAddr := envStr("DATA_ADDR", ":9092")
 
-	var groupSweepIntervalMs int64
-	if raw := os.Getenv("GROUP_SWEEP_INTERVAL_MS"); raw != "" {
-		v, parseErr := strconv.ParseInt(raw, 10, 64)
-		if parseErr != nil {
-			return nil, fmt.Errorf("GROUP_SWEEP_INTERVAL_MS: %w", parseErr)
-		}
-		groupSweepIntervalMs = v
+	groupSweepIntervalMs, err := envInt64("GROUP_SWEEP_INTERVAL_MS", 0)
+	if err != nil {
+		return nil, err
 	}
-
-	var retentionCheckIntervalMs int64
-	if raw := os.Getenv("RETENTION_CHECK_INTERVAL_MS"); raw != "" {
-		v, parseErr := strconv.ParseInt(raw, 10, 64)
-		if parseErr != nil {
-			return nil, fmt.Errorf("RETENTION_CHECK_INTERVAL_MS: %w", parseErr)
-		}
-		retentionCheckIntervalMs = v
+	retentionCheckIntervalMs, err := envInt64("RETENTION_CHECK_INTERVAL_MS", 0)
+	if err != nil {
+		return nil, err
+	}
+	segmentMaxBytes, err := envInt64("SEGMENT_MAX_BYTES", 128*1024*1024)
+	if err != nil {
+		return nil, err
+	}
+	indexSampleBytes, err := envInt("INDEX_SAMPLE_BYTES", 4096)
+	if err != nil {
+		return nil, err
+	}
+	bootstrapTimeoutMs, err := envInt64("BOOTSTRAP_TIMEOUT_MS", 30_000)
+	if err != nil {
+		return nil, err
+	}
+	reconcileIntervalMs, err := envInt64("RECONCILE_INTERVAL_MS", 500)
+	if err != nil {
+		return nil, err
+	}
+	leaderCheckIntervalMs, err := envInt64("LEADER_CHECK_INTERVAL_MS", 1000)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Config{
-		NodeID:         nodeID,
-		RaftAddress:    os.Getenv("RAFT_ADDR"),
-		ManagementAddr: mgmtAddr,
-		DataAddr:       dataAddr,
-		DataDir:        os.Getenv("DATA_DIR"),
-		RaftRTTMs:      rttMs,
-		Peers:          peers,
+		NodeID:            nodeID,
+		RaftAddress:       os.Getenv("RAFT_ADDR"),
+		ManagementAddr:    envStr("MGMT_ADDR", ":9091"),
+		DataAddr:          dataAddr,
+		AdvertiseDataAddr: envStr("ADVERTISE_DATA_ADDR", dataAddr),
+		DataDir:           os.Getenv("DATA_DIR"),
+		RaftRTTMs:         rttMs,
+		Peers:             peers,
 		Coordinator: CoordinatorConfig{
-			GroupSweepIntervalMs: groupSweepIntervalMs,
+			GroupSweepIntervalMs:  groupSweepIntervalMs,
+			BootstrapTimeoutMs:    bootstrapTimeoutMs,
+			ReconcileIntervalMs:   reconcileIntervalMs,
+			LeaderCheckIntervalMs: leaderCheckIntervalMs,
 		},
 		Storage: StorageConfig{
 			RetentionCheckIntervalMs: retentionCheckIntervalMs,
+			SegmentMaxBytes:          segmentMaxBytes,
+			IndexSampleBytes:         indexSampleBytes,
 		},
 	}, nil
 }
