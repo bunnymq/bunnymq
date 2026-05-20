@@ -14,7 +14,7 @@ Three open questions from the design documents require decisions before FSM impl
 
 1. **CC OQ4 (04-cluster-coordinator.md):** `reconcileOnce` needs to list all partitions across all topics. A `QueryListAllPartitions` query type is proposed but was not added to `03-raft-fsm.md §3.4`. The alternative: issue two sequential lookups (`QueryListTopics` → per-topic `QueryGetPartitions`).
 
-2. **DC OQ2 (05-data-coordinator.md §6.2):** `QueryGetNewDataCh` is proposed as a new `PartitionQueryType` in `03-raft-fsm.md §4.5` for the long-poll fetch path. Its addition is contingent on T-005 (confirming Lookup/Update concurrency and channel-via-interface{} return safety).
+2. **DC OQ2 (05-data-coordinator.md §6.2):** `QueryGetNewDataCh` is proposed as a new `PartitionQueryType` in `03-raft-fsm.md §4.5` for the long-poll fetch path. Its addition is contingent on T-005 (confirming Lookup/Update concurrency and channel-via-any return safety).
 
 3. **CG OQ1 (08-consumer-groups.md §14):** Consumer group FSM commands use suggested opcodes `0x0A`, `0x0B`, `0x0C` for `JoinConsumerGroupCmd`, `LeaveConsumerGroupCmd`, `CommitConsumerOffsetCmd`. These must be reconciled against `03-raft-fsm.md §3.2` to confirm no collision with existing command types.
 
@@ -73,7 +73,7 @@ No amendment to `03-raft-fsm.md` required. The two existing query types (`QueryL
 
 T-005 confirmed:
 - `IOnDiskStateMachine.Lookup()` may be called concurrently with `Update()` — dragonboat explicitly allows this via the `ConcurrentLookup` path (`Concurrent()` returns `true`).
-- `Lookup()` may return any Go type via `interface{}`, including `<-chan struct{}`, without restriction — dragonboat passes the return value through without type assertion or serialization.
+- `Lookup()` may return any Go type via `any`, including `<-chan struct{}`, without restriction — dragonboat passes the return value through without type assertion or serialization.
 - Storage's existing `segMu`/`chanMu` locking correctly handles the concurrent Lookup/Update access.
 
 `PartitionFSM.Lookup()` for `QueryGetNewDataCh` returns `storage.NewDataCh()` directly as `<-chan struct{}`. No wrapper struct is needed. The Data Coordinator captures the channel atomically under `chanMu`; `Append` closes the old channel and installs a new one under the same lock, so the captured channel value is safe to wait on after the Lookup returns.

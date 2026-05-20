@@ -9,8 +9,8 @@ import (
 	"time"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"go.uber.org/zap"
 
 	cmetrics "github.com/bunnymq/bunnymq/internal/cluster"
@@ -87,7 +87,7 @@ func TestRaftMetrics_ProposeDuration_All(t *testing.T) {
 
 	nodes := []*metadata.NodeInfo{{NodeID: 1, Address: "x"}}
 	host := &stubRaftHost{
-		lookupFn: func(q metadata.MetadataQuery) (interface{}, error) {
+		lookupFn: func(q metadata.MetadataQuery) (any, error) {
 			if q.Type == metadata.QueryListNodes {
 				return nodes, nil
 			}
@@ -119,7 +119,7 @@ func TestRaftMetrics_ProposeDuration_Zero(t *testing.T) {
 		{Topic: "t", PartitionID: 0, ShardID: 10},
 	}
 	host := &stubRaftHost{
-		lookupFn: func(q metadata.MetadataQuery) (interface{}, error) {
+		lookupFn: func(q metadata.MetadataQuery) (any, error) {
 			switch q.Type {
 			case metadata.QueryGetTopic:
 				return &metadata.TopicMeta{Name: "t"}, nil

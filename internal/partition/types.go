@@ -1,7 +1,7 @@
 package partition
 
 const (
-	CmdAppendBatch    uint8 = 0x01
+	CmdAppendBatch     uint8 = 0x01
 	CmdRetentionConfig uint8 = 0x02
 )
 
@@ -23,11 +23,11 @@ func (c PartitionCommand) Marshal() []byte {
 type PartitionQueryType string
 
 const (
-	QueryRead            PartitionQueryType = "read"
-	QueryReadByTime      PartitionQueryType = "read_by_time"
-	QueryEarliestOffset  PartitionQueryType = "earliest_offset"
-	QueryLatestOffset    PartitionQueryType = "latest_offset"
-	QueryGetNewDataCh    PartitionQueryType = "get_new_data_ch"
+	QueryRead           PartitionQueryType = "read"
+	QueryReadByTime     PartitionQueryType = "read_by_time"
+	QueryEarliestOffset PartitionQueryType = "earliest_offset"
+	QueryLatestOffset   PartitionQueryType = "latest_offset"
+	QueryGetNewDataCh   PartitionQueryType = "get_new_data_ch"
 )
 
 type PartitionQuery struct {
@@ -43,7 +43,7 @@ type RetentionConfigPayload struct {
 }
 
 // PartitionLookupResult wraps the 3-value tuple from storage.Read / storage.ReadByTime
-// into a single interface{} value for Lookup's return type.
+// into a single any value for Lookup's return type.
 type PartitionLookupResult struct {
 	Batches    []byte
 	NextOffset int64

@@ -113,7 +113,7 @@ type raftHostIface interface {
 	StopPartitionShard(shardID uint64) error
 	GetLeaderID(shardID uint64) (leaderID uint64, term uint64, valid bool, err error)
 	SyncProposeMetadata(ctx context.Context, cmd metadata.MetadataCommand) (sm.Result, error)
-	LookupMetadata(ctx context.Context, q metadata.MetadataQuery) (interface{}, error)
+	LookupMetadata(ctx context.Context, q metadata.MetadataQuery) (any, error)
 	ProposePartition(ctx context.Context, shardID uint64, cmd partition.PartitionCommand) error
 }
 

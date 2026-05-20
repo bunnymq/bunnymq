@@ -8,6 +8,7 @@ package bunnymqv1
 
 import (
 	context "context"
+
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -198,7 +199,7 @@ func RegisterDataServiceServer(s grpc.ServiceRegistrar, srv DataServiceServer) {
 	s.RegisterService(&DataService_ServiceDesc, srv)
 }
 
-func _DataService_Produce_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _DataService_Produce_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(ProduceRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -210,13 +211,13 @@ func _DataService_Produce_Handler(srv interface{}, ctx context.Context, dec func
 		Server:     srv,
 		FullMethod: DataService_Produce_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(DataServiceServer).Produce(ctx, req.(*ProduceRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DataService_Fetch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _DataService_Fetch_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(FetchRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -228,13 +229,13 @@ func _DataService_Fetch_Handler(srv interface{}, ctx context.Context, dec func(i
 		Server:     srv,
 		FullMethod: DataService_Fetch_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(DataServiceServer).Fetch(ctx, req.(*FetchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DataService_GetOffsets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _DataService_GetOffsets_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(GetOffsetsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -246,13 +247,13 @@ func _DataService_GetOffsets_Handler(srv interface{}, ctx context.Context, dec f
 		Server:     srv,
 		FullMethod: DataService_GetOffsets_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(DataServiceServer).GetOffsets(ctx, req.(*GetOffsetsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DataService_JoinGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _DataService_JoinGroup_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(JoinGroupRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -264,13 +265,13 @@ func _DataService_JoinGroup_Handler(srv interface{}, ctx context.Context, dec fu
 		Server:     srv,
 		FullMethod: DataService_JoinGroup_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(DataServiceServer).JoinGroup(ctx, req.(*JoinGroupRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DataService_Heartbeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _DataService_Heartbeat_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(HeartbeatRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -282,13 +283,13 @@ func _DataService_Heartbeat_Handler(srv interface{}, ctx context.Context, dec fu
 		Server:     srv,
 		FullMethod: DataService_Heartbeat_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(DataServiceServer).Heartbeat(ctx, req.(*HeartbeatRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DataService_LeaveGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _DataService_LeaveGroup_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(LeaveGroupRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -300,13 +301,13 @@ func _DataService_LeaveGroup_Handler(srv interface{}, ctx context.Context, dec f
 		Server:     srv,
 		FullMethod: DataService_LeaveGroup_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(DataServiceServer).LeaveGroup(ctx, req.(*LeaveGroupRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DataService_CommitOffset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _DataService_CommitOffset_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(CommitOffsetRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -318,13 +319,13 @@ func _DataService_CommitOffset_Handler(srv interface{}, ctx context.Context, dec
 		Server:     srv,
 		FullMethod: DataService_CommitOffset_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(DataServiceServer).CommitOffset(ctx, req.(*CommitOffsetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DataService_FetchCommittedOffsets_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _DataService_FetchCommittedOffsets_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(FetchCommittedOffsetsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -336,7 +337,7 @@ func _DataService_FetchCommittedOffsets_Handler(srv interface{}, ctx context.Con
 		Server:     srv,
 		FullMethod: DataService_FetchCommittedOffsets_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(DataServiceServer).FetchCommittedOffsets(ctx, req.(*FetchCommittedOffsetsRequest))
 	}
 	return interceptor(ctx, in, info, handler)

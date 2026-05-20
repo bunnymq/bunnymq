@@ -33,11 +33,11 @@ References:
 - Implement typed metadata helpers:
   - `SyncProposeMetadata(ctx, cmd MetadataCommand) (sm.Result, error)`: JSON-encodes `cmd`, calls `nh.SyncPropose(ctx, session, data)`.
   - `ProposeMetadata(ctx, cmd MetadataCommand) error`: calls `nh.Propose(ctx, session, data, timeout)`.
-  - `LookupMetadata(ctx, q MetadataQuery) (interface{}, error)`: calls `nh.ReadLocalNode(ctx, 0, q)`.
+  - `LookupMetadata(ctx, q MetadataQuery) (any, error)`: calls `nh.ReadLocalNode(ctx, 0, q)`.
 - Implement typed partition helpers:
   - `SyncProposePartition(ctx, shardID uint64, cmd PartitionCommand) (sm.Result, error)`: serializes cmd (1-byte prefix + payload), calls `nh.SyncPropose`.
   - `ProposePartition(ctx, shardID uint64, cmd PartitionCommand) error`.
-  - `LookupPartition(ctx, shardID uint64, q PartitionQuery) (interface{}, error)`.
+  - `LookupPartition(ctx, shardID uint64, q PartitionQuery) (any, error)`.
 - Implement `(*Host).Close() error`: calls `nh.Close()`.
 - Define `MetadataCommand`, `MetadataQuery`, `PartitionCommand`, `PartitionQuery` types (populated in T-025; stubs here are sufficient for the Host layer to compile).
 

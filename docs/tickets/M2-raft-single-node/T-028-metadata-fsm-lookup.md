@@ -17,7 +17,7 @@ References:
 
 ## Scope
 
-- Implement `(*MetadataFSM).Lookup(query interface{}) (interface{}, error)`:
+- Implement `(*MetadataFSM).Lookup(query any) (any, error)`:
   - Type-asserts `query` to `MetadataQuery`; returns error if wrong type.
   - Dispatches on `q.Type`:
 

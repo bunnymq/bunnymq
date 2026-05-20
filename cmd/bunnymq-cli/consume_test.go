@@ -22,7 +22,7 @@ func TestFormatRecord_UTF8(t *testing.T) {
 		t.Fatalf("formatRecord error: %v", err)
 	}
 
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestFormatRecord_BinaryValue(t *testing.T) {
 		t.Fatalf("formatRecord error: %v", err)
 	}
 
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
@@ -109,4 +109,3 @@ func TestParseOffsetReset(t *testing.T) {
 		}
 	}
 }
-

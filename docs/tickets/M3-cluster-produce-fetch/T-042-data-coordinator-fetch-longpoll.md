@@ -30,7 +30,7 @@ References:
     - Re-verify leadership (leader may have changed during a previous wait iteration).
     - `LookupPartition(QueryRead)` → if records non-empty, return.
     - `select { case <-ch: continue; case <-time.After(remaining): return nil; case <-ctx.Done(): return ctx.Err() }`.
-  - `QueryGetNewDataCh` is a new `PartitionQueryType` value (added to the enum from T-025); the `PartitionFSM.Lookup` case for it calls `storage.NewDataCh()` and returns the channel as `interface{}`.
+  - `QueryGetNewDataCh` is a new `PartitionQueryType` value (added to the enum from T-025); the `PartitionFSM.Lookup` case for it calls `storage.NewDataCh()` and returns the channel as `any`.
 
 ## Out of scope
 

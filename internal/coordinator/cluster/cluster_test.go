@@ -20,7 +20,7 @@ import (
 
 type stubRaftHost struct {
 	mu                    sync.Mutex
-	lookupFn              func(q metadata.MetadataQuery) (interface{}, error)
+	lookupFn              func(q metadata.MetadataQuery) (any, error)
 	syncProposeFn         func(cmd metadata.MetadataCommand) (sm.Result, error)
 	proposePartFn         func(shardID uint64, cmd partition.PartitionCommand) error
 	startPartitionShardFn func(shardID uint64, peers map[uint64]string, join bool) error
@@ -65,7 +65,7 @@ func (s *stubRaftHost) SyncProposeMetadata(_ context.Context, cmd metadata.Metad
 	return metadata.OKResult(), nil
 }
 
-func (s *stubRaftHost) LookupMetadata(_ context.Context, q metadata.MetadataQuery) (interface{}, error) {
+func (s *stubRaftHost) LookupMetadata(_ context.Context, q metadata.MetadataQuery) (any, error) {
 	if s.lookupFn != nil {
 		return s.lookupFn(q)
 	}
@@ -99,7 +99,7 @@ func (s *stubRaftHost) syncProposeCount() int {
 // --- stub data coordinator ---
 
 type stubDataCoord struct {
-	mu                        sync.Mutex
+	mu                         sync.Mutex
 	startPartitionReplicaCalls []partitionKey
 	stopPartitionReplicaCalls  []partitionKey
 }
@@ -220,7 +220,7 @@ func TestCreateTopic_ValidatesName(t *testing.T) {
 func TestCreateTopic_ValidatesRF(t *testing.T) {
 	nodes := makeNodes(2)
 	host := &stubRaftHost{
-		lookupFn: func(q metadata.MetadataQuery) (interface{}, error) {
+		lookupFn: func(q metadata.MetadataQuery) (any, error) {
 			if q.Type == metadata.QueryListNodes {
 				return nodes, nil
 			}
@@ -237,7 +237,7 @@ func TestCreateTopic_ValidatesRF(t *testing.T) {
 func TestCreateTopic_AlreadyExists(t *testing.T) {
 	nodes := makeNodes(3)
 	host := &stubRaftHost{
-		lookupFn: func(q metadata.MetadataQuery) (interface{}, error) {
+		lookupFn: func(q metadata.MetadataQuery) (any, error) {
 			if q.Type == metadata.QueryListNodes {
 				return nodes, nil
 			}
@@ -259,7 +259,7 @@ func TestCreateTopic_AlreadyExists(t *testing.T) {
 func TestDeleteTopic_NotFound(t *testing.T) {
 	var proposed atomic.Bool
 	host := &stubRaftHost{
-		lookupFn: func(q metadata.MetadataQuery) (interface{}, error) {
+		lookupFn: func(q metadata.MetadataQuery) (any, error) {
 			return nil, metadata.ErrNotFound
 		},
 		syncProposeFn: func(_ metadata.MetadataCommand) (sm.Result, error) {
@@ -281,7 +281,7 @@ func TestDeleteTopic_NotFound(t *testing.T) {
 
 func TestBootstrap_Timeout(t *testing.T) {
 	host := &stubRaftHost{
-		lookupFn: func(_ metadata.MetadataQuery) (interface{}, error) {
+		lookupFn: func(_ metadata.MetadataQuery) (any, error) {
 			return nil, errors.New("no leader")
 		},
 	}
@@ -307,7 +307,7 @@ func TestAlterTopicRetention_PropagatesShards(t *testing.T) {
 		{Topic: "t", PartitionID: 2, ShardID: 12},
 	}
 	host := &stubRaftHost{
-		lookupFn: func(q metadata.MetadataQuery) (interface{}, error) {
+		lookupFn: func(q metadata.MetadataQuery) (any, error) {
 			switch q.Type {
 			case metadata.QueryGetTopic:
 				return &metadata.TopicMeta{Name: "t"}, nil
@@ -373,7 +373,7 @@ func TestReconcileOnce_StartsExpectedShards(t *testing.T) {
 
 	var startCalls atomic.Int32
 	host := &stubRaftHost{
-		lookupFn: func(q metadata.MetadataQuery) (interface{}, error) {
+		lookupFn: func(q metadata.MetadataQuery) (any, error) {
 			switch q.Type {
 			case metadata.QueryListTopics:
 				return topics, nil
@@ -414,7 +414,7 @@ func TestReconcileOnce_StopsDeletedShards(t *testing.T) {
 
 	var stopCalls atomic.Int32
 	host := &stubRaftHost{
-		lookupFn: func(q metadata.MetadataQuery) (interface{}, error) {
+		lookupFn: func(q metadata.MetadataQuery) (any, error) {
 			switch q.Type {
 			case metadata.QueryListTopics:
 				return topics, nil
@@ -460,7 +460,7 @@ func TestReconcileOnce_IdempotentIfMatch(t *testing.T) {
 
 	var startCalls, stopCalls atomic.Int32
 	host := &stubRaftHost{
-		lookupFn: func(q metadata.MetadataQuery) (interface{}, error) {
+		lookupFn: func(q metadata.MetadataQuery) (any, error) {
 			switch q.Type {
 			case metadata.QueryListTopics:
 				return topics, nil

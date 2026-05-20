@@ -32,7 +32,7 @@ func (f *fakeNodeHost) Propose(_ *client.Session, _ []byte, _ time.Duration) (*d
 	return nil, nil
 }
 
-func (f *fakeNodeHost) StaleRead(shardID uint64, _ interface{}) (interface{}, error) {
+func (f *fakeNodeHost) StaleRead(shardID uint64, _ any) (any, error) {
 	f.lastShardID = shardID
 	return nil, nil
 }
@@ -181,7 +181,7 @@ type noopSM struct{}
 func noopSMFactory(_ uint64, _ uint64) sm.IStateMachine { return &noopSM{} }
 
 func (s *noopSM) Update(e sm.Entry) (sm.Result, error) { return sm.Result{}, nil }
-func (s *noopSM) Lookup(_ interface{}) (interface{}, error) { return nil, nil }
+func (s *noopSM) Lookup(_ any) (any, error)            { return nil, nil }
 func (s *noopSM) SaveSnapshot(w io.Writer, _ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
 	return nil
 }

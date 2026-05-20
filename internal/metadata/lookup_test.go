@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func lookup(t *testing.T, fsm *MetadataFSM, q MetadataQuery) interface{} {
+func lookup(t *testing.T, fsm *MetadataFSM, q MetadataQuery) any {
 	t.Helper()
 	result, err := fsm.Lookup(q)
 	if err != nil {

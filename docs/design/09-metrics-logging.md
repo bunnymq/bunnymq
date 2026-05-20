@@ -11,7 +11,7 @@ BunnyMQ's observability layer has two independent concerns: structured logging (
 `go.uber.org/zap` — specifically the `zap.Logger` type, not the `sugaredLogger` wrapper. Rationale:
 
 - Allocates zero heap objects per log call at `Info` and above when the level is enabled (important on the hot `Update()` path in the Partition FSM, though logging there is disabled at `Debug`).
-- Structured fields are typed (`zap.String`, `zap.Int64`, etc.), not `interface{}`, so field encoding is inlined without reflection.
+- Structured fields are typed (`zap.String`, `zap.Int64`, etc.), not `any`, so field encoding is inlined without reflection.
 - JSON output is production-standard; `zap` produces RFC 3339 nano timestamps and respects log-level filtering atomically (level can be changed at runtime via `zap.AtomicLevel`).
 
 Alternative (`zerolog`) is comparable in performance but has a smaller ecosystem and less precedent in Go infrastructure projects.

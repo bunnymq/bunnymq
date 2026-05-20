@@ -446,7 +446,7 @@ func sortedMemberIDs(members map[string]*MemberInfo) []string {
 	return ids
 }
 
-func (fsm *MetadataFSM) Lookup(q interface{}) (interface{}, error) {
+func (fsm *MetadataFSM) Lookup(q any) (any, error) {
 	query, ok := q.(MetadataQuery)
 	if !ok {
 		return nil, fmt.Errorf("expected MetadataQuery, got %T", q)
@@ -536,7 +536,7 @@ func (fsm *MetadataFSM) Lookup(q interface{}) (interface{}, error) {
 	}
 }
 
-func (fsm *MetadataFSM) lookupGroupState(query MetadataQuery) (interface{}, error) {
+func (fsm *MetadataFSM) lookupGroupState(query MetadataQuery) (any, error) {
 	switch query.Type {
 	case QueryGetGroupState:
 		if fsm.state.GroupStates == nil {

@@ -63,12 +63,12 @@ The wrapper exposes typed helpers that hide all dragonboat types. Other modules 
 // Metadata shard helpers
 func (h *Host) SyncProposeMetadata(ctx context.Context, cmd MetadataCommand) (sm.Result, error)
 func (h *Host) ProposeMetadata(ctx context.Context, cmd MetadataCommand) error
-func (h *Host) LookupMetadata(ctx context.Context, q MetadataQuery) (interface{}, error)
+func (h *Host) LookupMetadata(ctx context.Context, q MetadataQuery) (any, error)
 
 // Partition shard helpers
 func (h *Host) SyncProposePartition(ctx context.Context, shardID uint64, cmd PartitionCommand) (sm.Result, error)
 func (h *Host) ProposePartition(ctx context.Context, shardID uint64, cmd PartitionCommand) error
-func (h *Host) LookupPartition(ctx context.Context, shardID uint64, q PartitionQuery) (interface{}, error)
+func (h *Host) LookupPartition(ctx context.Context, shardID uint64, q PartitionQuery) (any, error)
 
 // Shard lifecycle (called by Cluster Coordinator)
 func (h *Host) StartPartitionShard(shardID uint64, initialMembers map[uint64]string, join bool) error
@@ -239,7 +239,7 @@ This algorithm is fully deterministic given the sorted inputs. It is identical t
 
 ### 3.4 Lookup Queries
 
-dragonboat calls `IStateMachine.Lookup(query interface{}) (interface{}, error)`. BunnyMQ uses a typed query struct:
+dragonboat calls `IStateMachine.Lookup(query any) (any, error)`. BunnyMQ uses a typed query struct:
 
 ```go
 type MetadataQuery struct {
@@ -437,7 +437,7 @@ Panic on failure: see [§4.7 Failure Modes](#47-failure-modes).
 
 ### 4.5 Lookup()
 
-`Lookup(query interface{}) (interface{}, error)` serves read requests from the Data Coordinator without a Raft round-trip:
+`Lookup(query any) (any, error)` serves read requests from the Data Coordinator without a Raft round-trip:
 
 ```go
 type PartitionQuery struct {
@@ -466,7 +466,7 @@ Reads are bounded by `storage.LatestOffset()`, which reflects only successfully 
 **SaveSnapshot** (no-op):
 
 ```go
-func (fsm *PartitionFSM) SaveSnapshot(_ interface{}, w io.Writer, _ <-chan struct{}) error {
+func (fsm *PartitionFSM) SaveSnapshot(_ any, w io.Writer, _ <-chan struct{}) error {
     _, err := w.Write([]byte("strategy-a-noop"))
     return err
 }
@@ -484,7 +484,7 @@ func (fsm *PartitionFSM) RecoverFromSnapshot(r io.Reader, _ <-chan struct{}) err
 **PrepareSnapshot** (no-op):
 
 ```go
-func (fsm *PartitionFSM) PrepareSnapshot() (interface{}, error) {
+func (fsm *PartitionFSM) PrepareSnapshot() (any, error) {
     return nil, nil
 }
 ```

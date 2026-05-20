@@ -102,6 +102,123 @@ NODE_ID=3 RAFT_ADDR=localhost:7003 MGMT_ADDR=:9095 DATA_ADDR=:9096 \
 
 ---
 
+## bunnymq-cli
+
+`bunnymq-cli` is the command-line tool for administering topics, producing messages, and consuming messages from a BunnyMQ cluster.
+
+### Build
+
+```bash
+go build -o bunnymq-cli ./cmd/bunnymq-cli
+```
+
+### Global flags
+
+These flags apply to every command:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--brokers` | `localhost:9091` | Comma-separated list of broker management addresses |
+| `--token` | _(none)_ | Authentication token (omit if auth is disabled) |
+| `--timeout` | `10s` | Request timeout |
+
+### Topic management
+
+```bash
+# Create a topic
+bunnymq-cli topic create --name orders --partitions 3 --replication-factor 3
+
+# Create a topic with retention limits
+bunnymq-cli topic create --name events --partitions 2 --replication-factor 1 \
+  --retention-ms 86400000 --retention-bytes 1073741824
+
+# List all topics
+bunnymq-cli topic list
+
+# Describe a topic (shows partition layout)
+bunnymq-cli topic describe --name orders
+
+# List partitions with earliest/latest offsets
+bunnymq-cli topic list-partitions --name orders
+
+# Increase the partition count
+bunnymq-cli topic alter-partitions --name orders --partitions 6
+
+# Update retention policy
+bunnymq-cli topic alter-retention --name orders --retention-ms 3600000
+
+# Delete a topic
+bunnymq-cli topic delete --name orders
+```
+
+### Producing messages
+
+```bash
+# Send a single message
+bunnymq-cli produce --topic orders --value '{"id":1}'
+
+# Send with a key and wait for all replicas to acknowledge
+bunnymq-cli produce --topic orders --key user-42 --value '{"id":1}' --acks all
+
+# Fire-and-forget (no acknowledgement)
+bunnymq-cli produce --topic orders --value '{"id":2}' --acks zero
+
+# Pipe messages from stdin (one message per non-empty line)
+cat messages.json | bunnymq-cli produce --topic orders
+```
+
+`--acks` accepts `all` (default, waits for full replication) or `zero` (no wait).  
+When `--value` is omitted the command reads lines from stdin until EOF or SIGINT.
+
+### Consuming messages
+
+Each consumed record is printed as a JSON line to stdout:
+
+```json
+{"topic":"orders","partition":0,"offset":42,"key":"...","value":"...","headers":{},"timestamp_ms":1716200000000}
+```
+
+**Manual mode** — read from a specific partition starting at a given offset:
+
+```bash
+# Read 10 messages from partition 0, starting at offset 0
+bunnymq-cli consume --topic orders --partition 0 --offset 0 --count 10
+
+# Tail a partition indefinitely
+bunnymq-cli consume --topic orders --partition 0
+```
+
+**Group mode** — let the broker assign partitions and track offsets:
+
+```bash
+# Consume with a consumer group (all partitions assigned automatically)
+bunnymq-cli consume --topic orders --group my-service
+
+# Start from the latest available offset
+bunnymq-cli consume --topic orders --group my-service --offset-reset latest
+
+# Read exactly 50 records, then commit and exit
+bunnymq-cli consume --topic orders --group my-service --count 50
+```
+
+`--partition` is required in manual mode and ignored in group mode.  
+`--count 0` (default) runs until interrupted with SIGINT/SIGTERM.
+
+### Cluster information
+
+```bash
+# List all broker nodes in the cluster
+bunnymq-cli cluster describe
+```
+
+### Connecting to the docker-compose cluster
+
+```bash
+bunnymq-cli --brokers localhost:19091,localhost:29091,localhost:39091 topic list
+```
+
+---
+
 ## Running tests
 
 ```bash

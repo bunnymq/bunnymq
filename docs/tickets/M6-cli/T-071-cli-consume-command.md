@@ -68,7 +68,7 @@ References:
 ## Tests required
 
 - `TestFormatRecord_UTF8` — creates a `client.Record` with a plain UTF-8 key and value; calls `formatRecord`; asserts the JSON contains `"topic"`, `"partition"`, `"offset"`, `"value"` fields with the expected string values.
-- `TestFormatRecord_BinaryValue` — creates a `client.Record` with a binary (non-UTF-8) value; calls `formatRecord`; asserts the result is valid JSON and the `"value"` field is a base64 string (i.e., `json.Unmarshal` into `map[string]interface{}` and check `value` is a string that round-trips through `base64.StdEncoding.DecodeString`).
+- `TestFormatRecord_BinaryValue` — creates a `client.Record` with a binary (non-UTF-8) value; calls `formatRecord`; asserts the result is valid JSON and the `"value"` field is a base64 string (i.e., `json.Unmarshal` into `map[string]any` and check `value` is a string that round-trips through `base64.StdEncoding.DecodeString`).
 - `TestParseOffsetReset` — table-driven: `"earliest"` → `OffsetResetEarliest`, `"latest"` → `OffsetResetLatest`, `""` → `OffsetResetLatest`, `"EARLIEST"` → `OffsetResetLatest` (case-sensitive; unknown values fall back to latest).
 
 ## Dependencies

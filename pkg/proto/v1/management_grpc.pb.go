@@ -8,6 +8,7 @@ package bunnymqv1
 
 import (
 	context "context"
+
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -198,7 +199,7 @@ func RegisterManagementServiceServer(s grpc.ServiceRegistrar, srv ManagementServ
 	s.RegisterService(&ManagementService_ServiceDesc, srv)
 }
 
-func _ManagementService_CreateTopic_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _ManagementService_CreateTopic_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(CreateTopicRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -210,13 +211,13 @@ func _ManagementService_CreateTopic_Handler(srv interface{}, ctx context.Context
 		Server:     srv,
 		FullMethod: ManagementService_CreateTopic_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(ManagementServiceServer).CreateTopic(ctx, req.(*CreateTopicRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ManagementService_DeleteTopic_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _ManagementService_DeleteTopic_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(DeleteTopicRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -228,13 +229,13 @@ func _ManagementService_DeleteTopic_Handler(srv interface{}, ctx context.Context
 		Server:     srv,
 		FullMethod: ManagementService_DeleteTopic_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(ManagementServiceServer).DeleteTopic(ctx, req.(*DeleteTopicRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ManagementService_ListTopics_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _ManagementService_ListTopics_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(ListTopicsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -246,13 +247,13 @@ func _ManagementService_ListTopics_Handler(srv interface{}, ctx context.Context,
 		Server:     srv,
 		FullMethod: ManagementService_ListTopics_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(ManagementServiceServer).ListTopics(ctx, req.(*ListTopicsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ManagementService_DescribeTopic_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _ManagementService_DescribeTopic_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(DescribeTopicRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -264,13 +265,13 @@ func _ManagementService_DescribeTopic_Handler(srv interface{}, ctx context.Conte
 		Server:     srv,
 		FullMethod: ManagementService_DescribeTopic_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(ManagementServiceServer).DescribeTopic(ctx, req.(*DescribeTopicRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ManagementService_AlterTopicPartitions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _ManagementService_AlterTopicPartitions_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(AlterTopicPartitionsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -282,13 +283,13 @@ func _ManagementService_AlterTopicPartitions_Handler(srv interface{}, ctx contex
 		Server:     srv,
 		FullMethod: ManagementService_AlterTopicPartitions_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(ManagementServiceServer).AlterTopicPartitions(ctx, req.(*AlterTopicPartitionsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ManagementService_AlterTopicRetention_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _ManagementService_AlterTopicRetention_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(AlterTopicRetentionRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -300,13 +301,13 @@ func _ManagementService_AlterTopicRetention_Handler(srv interface{}, ctx context
 		Server:     srv,
 		FullMethod: ManagementService_AlterTopicRetention_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(ManagementServiceServer).AlterTopicRetention(ctx, req.(*AlterTopicRetentionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ManagementService_DescribeCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _ManagementService_DescribeCluster_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(DescribeClusterRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -318,13 +319,13 @@ func _ManagementService_DescribeCluster_Handler(srv interface{}, ctx context.Con
 		Server:     srv,
 		FullMethod: ManagementService_DescribeCluster_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(ManagementServiceServer).DescribeCluster(ctx, req.(*DescribeClusterRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ManagementService_ListPartitions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _ManagementService_ListPartitions_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(ListPartitionsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -336,7 +337,7 @@ func _ManagementService_ListPartitions_Handler(srv interface{}, ctx context.Cont
 		Server:     srv,
 		FullMethod: ManagementService_ListPartitions_FullMethodName,
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(ManagementServiceServer).ListPartitions(ctx, req.(*ListPartitionsRequest))
 	}
 	return interceptor(ctx, in, info, handler)

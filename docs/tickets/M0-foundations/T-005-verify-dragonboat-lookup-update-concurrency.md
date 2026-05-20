@@ -6,13 +6,13 @@
 
 ## Goal
 
-Confirm two concurrency properties of dragonboat v4's `IOnDiskStateMachine`: (a) `Lookup()` may be called concurrently with `Update()` on the same FSM instance, and (b) `Lookup()` may safely return a Go channel (`<-chan struct{}`) as `interface{}`.
+Confirm two concurrency properties of dragonboat v4's `IOnDiskStateMachine`: (a) `Lookup()` may be called concurrently with `Update()` on the same FSM instance, and (b) `Lookup()` may safely return a Go channel (`<-chan struct{}`) as `any`.
 
 ## Context
 
 `05-data-coordinator.md §6.2` and OQ2 require that the Partition FSM's `Lookup()` returns `storage.NewDataCh()` (a `<-chan struct{}`) for the long-poll fetch path. This requires:
 1. dragonboat allows `Lookup()` and `Update()` to run concurrently on the same `IOnDiskStateMachine` instance.
-2. dragonboat does not restrict the Go type that `Lookup()` returns via `interface{}`.
+2. dragonboat does not restrict the Go type that `Lookup()` returns via `any`.
 
 `05-data-coordinator.md §9` marks point (1) as "VERIFY pending dragonboat v4 API documentation review." Point (2) is a Go type-system question but must be confirmed against any dragonboat-specific restrictions. The new `QueryGetNewDataCh` PartitionQueryType is gated on this verification.
 
@@ -56,16 +56,16 @@ The `Lookup()` method comment confirms the symmetric direction:
 
 ### 2. Channel return from Lookup: **safe, no restrictions**
 
-`Lookup(interface{}) (interface{}, error)` — Go's `interface{}` accepts any type. The dragonboat internal adapter (`OnDiskStateMachine.Lookup` in `internal/rsm/adapter.go`) passes the result directly through:
+`Lookup(any) (any, error)` — Go's `any` accepts any type. The dragonboat internal adapter (`OnDiskStateMachine.Lookup` in `internal/rsm/adapter.go`) passes the result directly through:
 
 ```go
-func (s *OnDiskStateMachine) Lookup(query interface{}) (interface{}, error) {
+func (s *OnDiskStateMachine) Lookup(query any) (any, error) {
     s.ensureOpened()
     return s.sm.Lookup(query)
 }
 ```
 
-No type assertion, no serialization, no restriction is applied to the returned value. Returning a `<-chan struct{}` via `interface{}` is fully safe from dragonboat's perspective.
+No type assertion, no serialization, no restriction is applied to the returned value. Returning a `<-chan struct{}` via `any` is fully safe from dragonboat's perspective.
 
 ### 3. Impact on Storage concurrency model
 
@@ -89,7 +89,7 @@ No race condition exists because the channel value is captured atomically under 
 ## Definition of done
 
 - [x] Lookup/Update concurrency behavior confirmed (concurrent or serialized) with dragonboat v4 source reference.
-- [x] Channel-via-interface{} return safety confirmed or alternative approach documented.
+- [x] Channel-via-any return safety confirmed or alternative approach documented.
 - [x] If the design assumption (concurrent Lookup/Update) is wrong: impact on Storage concurrency model assessed and documented.
 - [x] `QueryGetNewDataCh` PartitionQueryType confirmed as safe to add (pending this result).
 

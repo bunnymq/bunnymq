@@ -30,7 +30,7 @@ sequenceDiagram
         RH->>+PFSM: Lookup(QueryGetNewDataCh)
         PFSM->>STR: NewDataCh() — acquire chanMu, return current ch
         STR-->>PFSM: ch (chan struct{})
-        PFSM-->>-RH: ch as interface{}
+        PFSM-->>-RH: ch as any
         RH-->>-DC: ch
 
         Note over DC: Step 2 — Re-verify leadership<br/>(leader may have changed since RPC arrived)

@@ -18,7 +18,7 @@ References:
 
 ## Scope
 
-- Implement `(*PartitionFSM).Lookup(query interface{}) (interface{}, error)`:
+- Implement `(*PartitionFSM).Lookup(query any) (any, error)`:
   - Type-asserts `query` to `PartitionQuery`.
   - Dispatches on `q.Type`:
     - `QueryRead`: returns `storage.Read(q.Offset, q.MaxBytes)` (3-value tuple).
@@ -26,10 +26,10 @@ References:
     - `QueryEarliestOffset`: returns `storage.EarliestOffset()`.
     - `QueryLatestOffset`: returns `storage.LatestOffset()`.
   - Returns `error` from storage unchanged.
-- Define helper `type PartitionLookupResult struct { Batches []byte; NextOffset int64 }` for `QueryRead` and `QueryReadByTime` return (wraps 3-tuple into single interface{} value).
+- Define helper `type PartitionLookupResult struct { Batches []byte; NextOffset int64 }` for `QueryRead` and `QueryReadByTime` return (wraps 3-tuple into single any value).
 - Implement Strategy A snapshot methods:
-  - `PrepareSnapshot() (interface{}, error)`: returns `nil, nil`.
-  - `SaveSnapshot(ctx interface{}, w io.Writer, done <-chan struct{}) error`: writes marker `"strategy-a-noop"` to `w`; returns nil.
+  - `PrepareSnapshot() (any, error)`: returns `nil, nil`.
+  - `SaveSnapshot(ctx any, w io.Writer, done <-chan struct{}) error`: writes marker `"strategy-a-noop"` to `w`; returns nil.
   - `RecoverFromSnapshot(r io.Reader, done <-chan struct{}) error`: reads and discards; returns nil.
 - Implement `(*PartitionFSM).Sync() error`: returns nil.
 - Implement `(*PartitionFSM).Close() error`: calls `storage.Close()`.
@@ -65,4 +65,4 @@ T-020 (Storage.Read, ReadByTime, EarliestOffset, LatestOffset, Close).
 
 ## Notes
 
-`Lookup` on `IOnDiskStateMachine` **may** be called concurrently with `Update` by dragonboat. Storage's concurrency model (§8 of 02-storage.md) handles this: reads use `segMu.RLock()` and are safe concurrent with the single Append goroutine. No additional mutex is needed in `Lookup`. The `PartitionLookupResult` wrapper type is needed because `Lookup` returns `interface{}` — the 3-value tuple `([]byte, int64, error)` cannot be returned directly as a single interface value.
+`Lookup` on `IOnDiskStateMachine` **may** be called concurrently with `Update` by dragonboat. Storage's concurrency model (§8 of 02-storage.md) handles this: reads use `segMu.RLock()` and are safe concurrent with the single Append goroutine. No additional mutex is needed in `Lookup`. The `PartitionLookupResult` wrapper type is needed because `Lookup` returns `any` — the 3-value tuple `([]byte, int64, error)` cannot be returned directly as a single interface value.

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	metadataShardID      = uint64(0)
+	metadataShardID       = uint64(0)
 	defaultProposeTimeout = 5 * time.Second
 )
 
@@ -34,7 +34,7 @@ type Config struct {
 type nodeHostIface interface {
 	SyncPropose(ctx context.Context, session *client.Session, cmd []byte) (sm.Result, error)
 	Propose(session *client.Session, cmd []byte, timeout time.Duration) (*dragonboat.RequestState, error)
-	StaleRead(shardID uint64, query interface{}) (interface{}, error)
+	StaleRead(shardID uint64, query any) (any, error)
 	GetNoOPSession(shardID uint64) *client.Session
 	StartReplica(initialMembers map[uint64]string, join bool, create sm.CreateStateMachineFunc, cfg dbconfig.Config) error
 	StartOnDiskReplica(initialMembers map[uint64]string, join bool, create sm.CreateOnDiskStateMachineFunc, cfg dbconfig.Config) error
@@ -134,7 +134,7 @@ func (h *Host) ProposeMetadata(ctx context.Context, cmd metadata.MetadataCommand
 }
 
 // LookupMetadata queries the local Metadata FSM without a Raft round-trip.
-func (h *Host) LookupMetadata(ctx context.Context, q metadata.MetadataQuery) (interface{}, error) {
+func (h *Host) LookupMetadata(ctx context.Context, q metadata.MetadataQuery) (any, error) {
 	return h.nh.StaleRead(metadataShardID, q)
 }
 
@@ -175,7 +175,7 @@ func (h *Host) ProposePartition(ctx context.Context, shardID uint64, cmd partiti
 }
 
 // LookupPartition queries the local Partition FSM without a Raft round-trip.
-func (h *Host) LookupPartition(ctx context.Context, shardID uint64, q partition.PartitionQuery) (interface{}, error) {
+func (h *Host) LookupPartition(ctx context.Context, shardID uint64, q partition.PartitionQuery) (any, error) {
 	return h.nh.StaleRead(shardID, q)
 }
 

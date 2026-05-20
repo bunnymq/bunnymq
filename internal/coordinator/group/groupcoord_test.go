@@ -32,7 +32,7 @@ func (s *stubNodeHost) SyncProposeMetadata(_ context.Context, cmd metadata.Metad
 	return s.fsm.Update(sm.Entry{Cmd: data})
 }
 
-func (s *stubNodeHost) LookupMetadata(_ context.Context, q metadata.MetadataQuery) (interface{}, error) {
+func (s *stubNodeHost) LookupMetadata(_ context.Context, q metadata.MetadataQuery) (any, error) {
 	return s.fsm.Lookup(q)
 }
 
