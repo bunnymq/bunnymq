@@ -1,3 +1,5 @@
 .DS_Store
 ./bunnymq-cli]
 ./bunnymq
+.claude/
+CLAUDE.md
