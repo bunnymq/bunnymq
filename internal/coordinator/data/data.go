@@ -373,3 +373,18 @@ func (dc *DataCoordinator) GetOffsetByTimestamp(
 	}
 	return int64(binary.BigEndian.Uint64(r.Batches[0:8])), nil
 }
+
+// PartitionOffsets returns the earliest and latest offsets for the given shard
+// using a stale (non-linearizable) read that works from any replica node.
+// Returns -1, -1 if the shard is not running on this node.
+func (dc *DataCoordinator) PartitionOffsets(ctx context.Context, shardID uint64) (earliest, latest int64, err error) {
+	earlyRaw, err := dc.raftHost.LookupPartition(ctx, shardID, partition.PartitionQuery{Type: partition.QueryEarliestOffset})
+	if err != nil {
+		return -1, -1, err
+	}
+	latestRaw, err := dc.raftHost.LookupPartition(ctx, shardID, partition.PartitionQuery{Type: partition.QueryLatestOffset})
+	if err != nil {
+		return -1, -1, err
+	}
+	return earlyRaw.(int64), latestRaw.(int64), nil
+}

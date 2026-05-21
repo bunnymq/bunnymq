@@ -24,9 +24,9 @@ type ServerConfig struct {
 }
 
 // NewManagementServer builds a grpc.Server for the Management API.
-func NewManagementServer(config ServerConfig, cc *cluster.ClusterCoordinator, logger *zap.Logger) *grpc.Server {
+func NewManagementServer(config ServerConfig, cc *cluster.ClusterCoordinator, dc *data.DataCoordinator, logger *zap.Logger) *grpc.Server {
 	srv := grpc.NewServer(serverOptions(config, logger)...)
-	proto.RegisterManagementServiceServer(srv, apimgmt.NewServer(cc, logger))
+	proto.RegisterManagementServiceServer(srv, apimgmt.NewServer(cc, dc, logger))
 	return srv
 }
 

@@ -17,3 +17,9 @@ type ClusterCoordinatorIface interface {
 	AlterTopicRetention(ctx context.Context, name string, retentionMs int64, retentionBytes int64) error
 	DescribeCluster(ctx context.Context) (cluster.ClusterDescription, error)
 }
+
+// DataQueryIface is the subset of DataCoordinator used by ManagementServer for
+// stale offset reads that work from any replica node without a leader check.
+type DataQueryIface interface {
+	PartitionOffsets(ctx context.Context, shardID uint64) (earliest, latest int64, err error)
+}

@@ -79,20 +79,30 @@ func healthCheck() {
 	os.Exit(0)
 }
 
-// brokerHost wraps raft.Host and pre-wires a partition factory so that
-// ClusterCoordinator (which uses the factory-less StartPartitionShard interface)
-// can start partition shards without knowing the storage details.
+// brokerHost wraps raft.Host and builds per-partition factories on demand so that
+// ClusterCoordinator can pass topic/partitionID without knowing storage details.
 type brokerHost struct {
-	host    *raft.Host
-	factory sm.CreateOnDiskStateMachineFunc
+	host           *raft.Host
+	storageMetrics *storage.StorageMetrics
+	dataDir        string
+	storageCfg     *config.StorageConfig
 }
 
 func (bh *brokerHost) StartMetadataShard(members map[uint64]string, join bool, factory sm.CreateStateMachineFunc) error {
 	return bh.host.StartMetadataShard(members, join, factory)
 }
 
-func (bh *brokerHost) StartPartitionShard(shardID uint64, members map[uint64]string, join bool) error {
-	return bh.host.StartPartitionShard(shardID, members, join, bh.factory)
+func (bh *brokerHost) StartPartitionShard(shardID uint64, members map[uint64]string, join bool, topic string, partitionID int32) error {
+	partIDStr := fmt.Sprintf("%d", partitionID)
+	factory := func(sid uint64, _ uint64) sm.IOnDiskStateMachine {
+		dir := filepath.Join(bh.dataDir, "partitions", fmt.Sprintf("shard-%d", sid))
+		if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+			panic(fmt.Sprintf("mkdir partition dir: %v", mkErr))
+		}
+		sidecarPath := filepath.Join(dir, "applied.idx")
+		return partition.NewPartitionFSM(dir, sidecarPath, bh.storageCfg, bh.storageMetrics, topic, partIDStr)
+	}
+	return bh.host.StartPartitionShard(shardID, members, join, factory)
 }
 
 func (bh *brokerHost) StopPartitionShard(shardID uint64) error {
@@ -123,13 +133,13 @@ func (bh *brokerHost) SyncProposePartition(ctx context.Context, shardID uint64, 
 	return bh.host.SyncProposePartition(ctx, shardID, cmd)
 }
 
-func startObservability(cfg *config.Config, logger *zap.Logger) (*api.ServerMetrics, *api.MetricsServer, *api.PprofServer, *cmetrics.RaftMetrics, error) {
+func startObservability(cfg *config.Config, logger *zap.Logger) (*api.ServerMetrics, *api.MetricsServer, *api.PprofServer, *cmetrics.RaftMetrics, *storage.StorageMetrics, error) {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector())
 	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	serverMetrics := api.NewServerMetrics(reg)
-	_ = storage.NewStorageMetrics(reg) // registers metrics; wiring to storage is handled at partition layer (T-060)
+	storageMetrics := storage.NewStorageMetrics(reg)
 	raftMetrics := cmetrics.NewRaftMetrics(reg)
 
 	metricsAddr := cfg.MetricsAddr
@@ -138,7 +148,7 @@ func startObservability(cfg *config.Config, logger *zap.Logger) (*api.ServerMetr
 	}
 	metricsSrv := api.NewMetricsServer(metricsAddr, reg)
 	if err := metricsSrv.Start(); err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("start metrics server %s: %w", metricsAddr, err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("start metrics server %s: %w", metricsAddr, err)
 	}
 	logger.Info("metrics server started", zap.String("metrics_addr", metricsSrv.Addr()))
 
@@ -148,28 +158,19 @@ func startObservability(cfg *config.Config, logger *zap.Logger) (*api.ServerMetr
 		if pprofErr != nil {
 			logger.Warn("pprof server rejected", zap.String("addr", cfg.PprofAddr), zap.Error(pprofErr))
 		} else if pprofErr = ps.Start(); pprofErr != nil {
-			return nil, nil, nil, nil, fmt.Errorf("start pprof server %s: %w", cfg.PprofAddr, pprofErr)
+			return nil, nil, nil, nil, nil, fmt.Errorf("start pprof server %s: %w", cfg.PprofAddr, pprofErr)
 		} else {
 			pprofSrv = ps
 		}
 	}
 
-	return serverMetrics, metricsSrv, pprofSrv, raftMetrics, nil
+	return serverMetrics, metricsSrv, pprofSrv, raftMetrics, storageMetrics, nil
 }
 
 func run(cfg *config.Config, logger *zap.Logger) error {
-	serverMetrics, metricsSrv, pprofSrv, raftMetrics, err := startObservability(cfg, logger)
+	serverMetrics, metricsSrv, pprofSrv, raftMetrics, storageMetrics, err := startObservability(cfg, logger)
 	if err != nil {
 		return err
-	}
-
-	partFactory := func(shardID uint64, _ uint64) sm.IOnDiskStateMachine {
-		dir := filepath.Join(cfg.DataDir, "partitions", fmt.Sprintf("shard-%d", shardID))
-		if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
-			panic(fmt.Sprintf("mkdir partition dir: %v", mkErr))
-		}
-		sidecarPath := filepath.Join(dir, "applied.idx")
-		return partition.NewPartitionFSM(dir, sidecarPath, &cfg.Storage)
 	}
 
 	raftHost, err := raft.NewHost(&raft.Config{
@@ -184,7 +185,12 @@ func run(cfg *config.Config, logger *zap.Logger) error {
 	}
 	defer raftHost.Close() //nolint:errcheck
 
-	bh := &brokerHost{host: raftHost, factory: partFactory}
+	bh := &brokerHost{
+		host:           raftHost,
+		storageMetrics: storageMetrics,
+		dataDir:        cfg.DataDir,
+		storageCfg:     &cfg.Storage,
+	}
 
 	dc := datacoord.NewDataCoordinator(datacoord.DataCoordinatorConfig{
 		NodeID:                cfg.NodeID,
@@ -263,7 +269,7 @@ func run(cfg *config.Config, logger *zap.Logger) error {
 		return fmt.Errorf("listen data %s: %w", dataAddr, err)
 	}
 
-	mgmtSrv := api.NewManagementServer(serverCfg, cc, logger.Named("mgmt-api"))
+	mgmtSrv := api.NewManagementServer(serverCfg, cc, dc, logger.Named("mgmt-api"))
 	dataSrv := api.NewDataServer(serverCfg, dc, gc, isMetadataLeader, logger.Named("data-api"))
 
 	go mgmtSrv.Serve(mgmtLn) //nolint:errcheck

@@ -33,14 +33,18 @@ type PartitionFSM struct {
 	sidecarPath      string
 	dir              string
 	cfg              *config.StorageConfig
+	storMetrics      *stor.StorageMetrics
+	topic            string
+	partitionID      string
 	metrics          *PartitionFSMMetrics
 }
 
 var _ sm.IOnDiskStateMachine = (*PartitionFSM)(nil)
 
 // NewPartitionFSM constructs a PartitionFSM that will open storage in dir on Open().
-// Pass an optional *PartitionFSMMetrics to enable per-shard observability; nil disables recording.
-func NewPartitionFSM(dir, sidecarPath string, cfg *config.StorageConfig, m ...*PartitionFSMMetrics) *PartitionFSM {
+// storMetrics, topic, and partitionID wire Prometheus storage metrics; pass nil/"" to disable.
+// Pass an optional *PartitionFSMMetrics to enable per-shard FSM observability.
+func NewPartitionFSM(dir, sidecarPath string, cfg *config.StorageConfig, storMetrics *stor.StorageMetrics, topic, partitionID string, m ...*PartitionFSMMetrics) *PartitionFSM {
 	var mtrx *PartitionFSMMetrics
 	if len(m) > 0 {
 		mtrx = m[0]
@@ -49,12 +53,19 @@ func NewPartitionFSM(dir, sidecarPath string, cfg *config.StorageConfig, m ...*P
 		dir:         dir,
 		sidecarPath: sidecarPath,
 		cfg:         cfg,
+		storMetrics: storMetrics,
+		topic:       topic,
+		partitionID: partitionID,
 		metrics:     mtrx,
 	}
 }
 
 func (fsm *PartitionFSM) Open(stopc <-chan struct{}) (uint64, error) {
-	s, err := stor.Open(fsm.dir, fsm.cfg)
+	opts := []stor.OpenOption{}
+	if fsm.storMetrics != nil {
+		opts = append(opts, stor.WithMetrics(fsm.storMetrics, fsm.topic, fsm.partitionID))
+	}
+	s, err := stor.Open(fsm.dir, fsm.cfg, opts...)
 	if err != nil {
 		return 0, err
 	}

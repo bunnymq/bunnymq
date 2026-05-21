@@ -34,7 +34,7 @@ func openFSM(t *testing.T) *PartitionFSM {
 	t.Helper()
 	dir := t.TempDir()
 	sidecarPath := filepath.Join(dir, "applied.idx")
-	fsm := NewPartitionFSM(dir, sidecarPath, testStorageCfg())
+	fsm := NewPartitionFSM(dir, sidecarPath, testStorageCfg(), nil, "", "")
 	t.Cleanup(func() { _ = fsm.Close() })
 	return fsm
 }
@@ -160,7 +160,7 @@ func TestPartitionFSM_OpenReconcile(t *testing.T) {
 	cfg := testStorageCfg()
 
 	// Step 1: open and append one batch via Update; this writes the sidecar.
-	fsm1 := NewPartitionFSM(dir, sidecarPath, cfg)
+	fsm1 := NewPartitionFSM(dir, sidecarPath, cfg, nil, "", "")
 	if _, err := fsm1.Open(nil); err != nil {
 		t.Fatalf("first Open: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestPartitionFSM_OpenReconcile(t *testing.T) {
 	_ = fsm1.storage.Close()
 
 	// Step 3: reopen; Open() must truncate storage back to committedOffset.
-	fsm2 := NewPartitionFSM(dir, sidecarPath, cfg)
+	fsm2 := NewPartitionFSM(dir, sidecarPath, cfg, nil, "", "")
 	t.Cleanup(func() { _ = fsm2.Close() })
 	idx, err := fsm2.Open(nil)
 	if err != nil {
@@ -363,7 +363,7 @@ func TestPartitionFSM_OpenClean(t *testing.T) {
 	sidecarPath := filepath.Join(dir, "applied.idx")
 	cfg := testStorageCfg()
 
-	fsm1 := NewPartitionFSM(dir, sidecarPath, cfg)
+	fsm1 := NewPartitionFSM(dir, sidecarPath, cfg, nil, "", "")
 	if _, err := fsm1.Open(nil); err != nil {
 		t.Fatalf("first Open: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestPartitionFSM_OpenClean(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	fsm2 := NewPartitionFSM(dir, sidecarPath, cfg)
+	fsm2 := NewPartitionFSM(dir, sidecarPath, cfg, nil, "", "")
 	t.Cleanup(func() { _ = fsm2.Close() })
 	idx, err := fsm2.Open(nil)
 	if err != nil {

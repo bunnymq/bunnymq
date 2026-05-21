@@ -10,6 +10,18 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// stubDataQuery is a minimal DataQueryIface implementation for tests.
+type stubDataQuery struct {
+	partitionOffsetsFn func(ctx context.Context, shardID uint64) (int64, int64, error)
+}
+
+func (s *stubDataQuery) PartitionOffsets(ctx context.Context, shardID uint64) (int64, int64, error) {
+	if s.partitionOffsetsFn != nil {
+		return s.partitionOffsetsFn(ctx, shardID)
+	}
+	return -1, -1, nil
+}
+
 // stubCoordinator is a minimal ClusterCoordinatorIface implementation for tests.
 type stubCoordinator struct {
 	createTopicFn          func(ctx context.Context, name string, partitionCount int32, replicationFactor int32, overrides cluster.TopicConfigOverrides) (cluster.TopicInfo, error)
@@ -62,7 +74,7 @@ func TestManagementServer_CreateTopic_Success(t *testing.T) {
 		createTopicFn: func(_ context.Context, _ string, _ int32, _ int32, _ cluster.TopicConfigOverrides) (cluster.TopicInfo, error) {
 			return want, nil
 		},
-	}, nil)
+	}, nil, nil)
 
 	resp, err := srv.CreateTopic(context.Background(), &pb.CreateTopicRequest{
 		Name:              "my-topic",
@@ -91,7 +103,7 @@ func TestManagementServer_CreateTopic_AlreadyExists(t *testing.T) {
 		createTopicFn: func(_ context.Context, _ string, _ int32, _ int32, _ cluster.TopicConfigOverrides) (cluster.TopicInfo, error) {
 			return cluster.TopicInfo{}, ErrTopicAlreadyExists
 		},
-	}, nil)
+	}, nil, nil)
 
 	_, err := srv.CreateTopic(context.Background(), &pb.CreateTopicRequest{Name: "dup"})
 	if err == nil {
@@ -109,7 +121,7 @@ func TestManagementServer_DeleteTopic_NotFound(t *testing.T) {
 		deleteTopicFn: func(_ context.Context, _ string) error {
 			return ErrTopicNotFound
 		},
-	}, nil)
+	}, nil, nil)
 
 	_, err := srv.DeleteTopic(context.Background(), &pb.DeleteTopicRequest{Name: "missing"})
 	if err == nil {
@@ -134,7 +146,7 @@ func TestManagementServer_DescribeTopic_Success(t *testing.T) {
 				},
 			}, nil
 		},
-	}, nil)
+	}, nil, nil)
 
 	resp, err := srv.DescribeTopic(context.Background(), &pb.DescribeTopicRequest{Name: "t"})
 	if err != nil {
@@ -155,7 +167,7 @@ func TestManagementServer_AlterTopicPartitions_InvalidArg(t *testing.T) {
 		alterPartitionCountFn: func(_ context.Context, _ string, _ int32) error {
 			return ErrInvalidArgument
 		},
-	}, nil)
+	}, nil, nil)
 
 	_, err := srv.AlterTopicPartitions(context.Background(), &pb.AlterTopicPartitionsRequest{Name: "t", NewPartitionCount: 1})
 	if err == nil {
@@ -179,7 +191,7 @@ func TestManagementServer_DescribeCluster(t *testing.T) {
 				},
 			}, nil
 		},
-	}, nil)
+	}, nil, nil)
 
 	resp, err := srv.DescribeCluster(context.Background(), &pb.DescribeClusterRequest{})
 	if err != nil {
@@ -191,6 +203,50 @@ func TestManagementServer_DescribeCluster(t *testing.T) {
 	for i, n := range resp.Nodes {
 		if n.NodeId != uint64(i+1) {
 			t.Errorf("nodes[%d].node_id: got %d, want %d", i, n.NodeId, i+1)
+		}
+	}
+}
+
+func TestManagementServer_ListPartitions_Offsets(t *testing.T) {
+	cc := &stubCoordinator{
+		describeTopicFn: func(_ context.Context, _ string) (cluster.TopicDescription, error) {
+			return cluster.TopicDescription{
+				TopicInfo: cluster.TopicInfo{Name: "t", PartitionCount: 2},
+				Partitions: []cluster.PartitionInfo{
+					{PartitionID: 0, ShardID: 10, LeaderNodeID: 1},
+					{PartitionID: 1, ShardID: 11, LeaderNodeID: 2},
+				},
+			}, nil
+		},
+	}
+	dq := &stubDataQuery{
+		partitionOffsetsFn: func(_ context.Context, shardID uint64) (int64, int64, error) {
+			offsets := map[uint64][2]int64{
+				10: {0, 42},
+				11: {5, 100},
+			}
+			if o, ok := offsets[shardID]; ok {
+				return o[0], o[1], nil
+			}
+			return -1, -1, nil
+		},
+	}
+	srv := NewServer(cc, dq, nil)
+
+	resp, err := srv.ListPartitions(context.Background(), &pb.ListPartitionsRequest{Topic: "t"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Partitions) != 2 {
+		t.Fatalf("partitions: got %d, want 2", len(resp.Partitions))
+	}
+	cases := []struct{ earliest, latest int64 }{{0, 42}, {5, 100}}
+	for i, p := range resp.Partitions {
+		if p.EarliestOffset != cases[i].earliest {
+			t.Errorf("partitions[%d].earliest: got %d, want %d", i, p.EarliestOffset, cases[i].earliest)
+		}
+		if p.LatestOffset != cases[i].latest {
+			t.Errorf("partitions[%d].latest: got %d, want %d", i, p.LatestOffset, cases[i].latest)
 		}
 	}
 }

@@ -16,15 +16,16 @@ import (
 type ManagementServer struct {
 	pb.UnimplementedManagementServiceServer
 	cc     ClusterCoordinatorIface
+	dq     DataQueryIface
 	logger *zap.Logger
 }
 
-// NewServer returns a ManagementServer backed by the given coordinator.
-func NewServer(cc ClusterCoordinatorIface, logger *zap.Logger) *ManagementServer {
+// NewServer returns a ManagementServer backed by the given coordinators.
+func NewServer(cc ClusterCoordinatorIface, dq DataQueryIface, logger *zap.Logger) *ManagementServer {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &ManagementServer{cc: cc, logger: logger}
+	return &ManagementServer{cc: cc, dq: dq, logger: logger}
 }
 
 func (s *ManagementServer) CreateTopic(ctx context.Context, req *pb.CreateTopicRequest) (*pb.CreateTopicResponse, error) {
@@ -39,14 +40,14 @@ func (s *ManagementServer) CreateTopic(ctx context.Context, req *pb.CreateTopicR
 	}
 	info, err := s.cc.CreateTopic(ctx, req.Name, req.PartitionCount, req.ReplicationFactor, overrides)
 	if err != nil {
-		return nil, mapCoordError(err)
+		return nil, s.mapCoordError(err)
 	}
 	return &pb.CreateTopicResponse{Topic: protoTopicInfo(info)}, nil
 }
 
 func (s *ManagementServer) DeleteTopic(ctx context.Context, req *pb.DeleteTopicRequest) (*pb.DeleteTopicResponse, error) {
 	if err := s.cc.DeleteTopic(ctx, req.Name); err != nil {
-		return nil, mapCoordError(err)
+		return nil, s.mapCoordError(err)
 	}
 	return &pb.DeleteTopicResponse{}, nil
 }
@@ -54,7 +55,7 @@ func (s *ManagementServer) DeleteTopic(ctx context.Context, req *pb.DeleteTopicR
 func (s *ManagementServer) ListTopics(ctx context.Context, _ *pb.ListTopicsRequest) (*pb.ListTopicsResponse, error) {
 	topics, err := s.cc.ListTopics(ctx)
 	if err != nil {
-		return nil, mapCoordError(err)
+		return nil, s.mapCoordError(err)
 	}
 	resp := &pb.ListTopicsResponse{Topics: make([]*pb.TopicInfo, len(topics))}
 	for i, t := range topics {
@@ -66,7 +67,7 @@ func (s *ManagementServer) ListTopics(ctx context.Context, _ *pb.ListTopicsReque
 func (s *ManagementServer) DescribeTopic(ctx context.Context, req *pb.DescribeTopicRequest) (*pb.DescribeTopicResponse, error) {
 	desc, err := s.cc.DescribeTopic(ctx, req.Name)
 	if err != nil {
-		return nil, mapCoordError(err)
+		return nil, s.mapCoordError(err)
 	}
 	resp := &pb.DescribeTopicResponse{
 		Topic:      protoTopicInfo(desc.TopicInfo),
@@ -80,14 +81,14 @@ func (s *ManagementServer) DescribeTopic(ctx context.Context, req *pb.DescribeTo
 
 func (s *ManagementServer) AlterTopicPartitions(ctx context.Context, req *pb.AlterTopicPartitionsRequest) (*pb.AlterTopicPartitionsResponse, error) {
 	if err := s.cc.AlterTopicPartitionCount(ctx, req.Name, req.NewPartitionCount); err != nil {
-		return nil, mapCoordError(err)
+		return nil, s.mapCoordError(err)
 	}
 	return &pb.AlterTopicPartitionsResponse{}, nil
 }
 
 func (s *ManagementServer) AlterTopicRetention(ctx context.Context, req *pb.AlterTopicRetentionRequest) (*pb.AlterTopicRetentionResponse, error) {
 	if err := s.cc.AlterTopicRetention(ctx, req.Name, req.RetentionMs, req.RetentionBytes); err != nil {
-		return nil, mapCoordError(err)
+		return nil, s.mapCoordError(err)
 	}
 	return &pb.AlterTopicRetentionResponse{}, nil
 }
@@ -95,7 +96,7 @@ func (s *ManagementServer) AlterTopicRetention(ctx context.Context, req *pb.Alte
 func (s *ManagementServer) DescribeCluster(ctx context.Context, _ *pb.DescribeClusterRequest) (*pb.DescribeClusterResponse, error) {
 	desc, err := s.cc.DescribeCluster(ctx)
 	if err != nil {
-		return nil, mapCoordError(err)
+		return nil, s.mapCoordError(err)
 	}
 	resp := &pb.DescribeClusterResponse{Nodes: make([]*pb.NodeInfo, len(desc.Nodes))}
 	for i, n := range desc.Nodes {
@@ -107,21 +108,28 @@ func (s *ManagementServer) DescribeCluster(ctx context.Context, _ *pb.DescribeCl
 func (s *ManagementServer) ListPartitions(ctx context.Context, req *pb.ListPartitionsRequest) (*pb.ListPartitionsResponse, error) {
 	desc, err := s.cc.DescribeTopic(ctx, req.Topic)
 	if err != nil {
-		return nil, mapCoordError(err)
+		return nil, s.mapCoordError(err)
 	}
 	partitions := make([]*pb.PartitionInfoWithOffsets, len(desc.Partitions))
 	for i, p := range desc.Partitions {
+		earliest, latest := int64(-1), int64(-1)
+		if s.dq != nil {
+			if e, l, qerr := s.dq.PartitionOffsets(ctx, p.ShardID); qerr == nil {
+				earliest, latest = e, l
+			}
+		}
 		partitions[i] = &pb.PartitionInfoWithOffsets{
-			Info:            protoPartitionInfo(p),
-			EarliestOffset:  0,
-			LatestOffset:    0,
+			Info:           protoPartitionInfo(p),
+			EarliestOffset: earliest,
+			LatestOffset:   latest,
 		}
 	}
 	return &pb.ListPartitionsResponse{Partitions: partitions}, nil
 }
 
 // mapCoordError converts coordinator sentinel errors to gRPC status errors with BunnyErrorDetail.
-func mapCoordError(err error) error {
+// For unmapped errors it logs the original cause at error level so it is visible in the broker log.
+func (s *ManagementServer) mapCoordError(err error) error {
 	var code codes.Code
 	var bunnyCode pb.BunnyErrorCode
 	var msg string
@@ -144,6 +152,7 @@ func mapCoordError(err error) error {
 		bunnyCode = pb.BunnyErrorCode_UNAVAILABLE
 		msg = err.Error()
 	default:
+		s.logger.Error("unmapped coordinator error", zap.Error(err))
 		code = codes.Internal
 		bunnyCode = pb.BunnyErrorCode_UNKNOWN
 		msg = "internal server error"

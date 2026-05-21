@@ -23,7 +23,7 @@ type stubRaftHost struct {
 	lookupFn              func(q metadata.MetadataQuery) (any, error)
 	syncProposeFn         func(cmd metadata.MetadataCommand) (sm.Result, error)
 	proposePartFn         func(shardID uint64, cmd partition.PartitionCommand) error
-	startPartitionShardFn func(shardID uint64, peers map[uint64]string, join bool) error
+	startPartitionShardFn func(shardID uint64, peers map[uint64]string, join bool, topic string, partitionID int32) error
 	stopPartitionShardFn  func(shardID uint64) error
 	getLeaderIDFn         func(shardID uint64) (uint64, uint64, bool, error)
 	proposePartCalls      []uint64 // shard IDs called
@@ -34,9 +34,9 @@ func (s *stubRaftHost) StartMetadataShard(_ map[uint64]string, _ bool, _ sm.Crea
 	return nil
 }
 
-func (s *stubRaftHost) StartPartitionShard(shardID uint64, peers map[uint64]string, join bool) error {
+func (s *stubRaftHost) StartPartitionShard(shardID uint64, peers map[uint64]string, join bool, topic string, partitionID int32) error {
 	if s.startPartitionShardFn != nil {
-		return s.startPartitionShardFn(shardID, peers, join)
+		return s.startPartitionShardFn(shardID, peers, join, topic, partitionID)
 	}
 	return nil
 }
@@ -384,7 +384,7 @@ func TestReconcileOnce_StartsExpectedShards(t *testing.T) {
 			}
 			return nil, errors.New("unexpected query")
 		},
-		startPartitionShardFn: func(_ uint64, _ map[uint64]string, _ bool) error {
+		startPartitionShardFn: func(_ uint64, _ map[uint64]string, _ bool, _ string, _ int32) error {
 			startCalls.Add(1)
 			return nil
 		},
@@ -471,7 +471,7 @@ func TestReconcileOnce_IdempotentIfMatch(t *testing.T) {
 			}
 			return nil, errors.New("unexpected query")
 		},
-		startPartitionShardFn: func(_ uint64, _ map[uint64]string, _ bool) error {
+		startPartitionShardFn: func(_ uint64, _ map[uint64]string, _ bool, _ string, _ int32) error {
 			startCalls.Add(1)
 			return nil
 		},

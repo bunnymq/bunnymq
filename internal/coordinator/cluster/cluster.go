@@ -109,7 +109,7 @@ type NodeDescriptor struct {
 // raftHostIface is the subset of raft.Host used by ClusterCoordinator.
 type raftHostIface interface {
 	StartMetadataShard(initialMembers map[uint64]string, join bool, factory sm.CreateStateMachineFunc) error
-	StartPartitionShard(shardID uint64, initialMembers map[uint64]string, join bool) error
+	StartPartitionShard(shardID uint64, initialMembers map[uint64]string, join bool, topic string, partitionID int32) error
 	StopPartitionShard(shardID uint64) error
 	GetLeaderID(shardID uint64) (leaderID uint64, term uint64, valid bool, err error)
 	SyncProposeMetadata(ctx context.Context, cmd metadata.MetadataCommand) (sm.Result, error)
@@ -621,7 +621,7 @@ func (cc *ClusterCoordinator) startShard(shardID uint64, info shardInfo) {
 	// restart correctly: on first start it bootstraps the shard; on restart it
 	// validates the peer map against saved bootstrap info. join=true is only for
 	// dynamic membership changes (RequestAddReplica), which BunnyMQ v1 never does.
-	if err := cc.raftHost.StartPartitionShard(shardID, info.Peers, false); err != nil {
+	if err := cc.raftHost.StartPartitionShard(shardID, info.Peers, false, info.Topic, info.PartitionID); err != nil {
 		cc.logger.Warn("failed to start partition shard",
 			zap.Uint64("shard_id", shardID), zap.Error(err))
 		return

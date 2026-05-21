@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/signal"
 	"syscall"
 
 	"github.com/bunnymq/bunnymq/pkg/client"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -123,6 +126,17 @@ loop:
 				break loop
 			}
 		}
+
+		if flagConsumeGroup != "" && len(records) > 0 {
+			if commitErr := c.Commit(ctx); commitErr != nil && ctx.Err() == nil {
+				if isTransientCommitErr(commitErr) {
+					// Heartbeat loop will detect and recover (stale gen → rejoin,
+					// Unavailable → find new coordinator). Skip and continue.
+					continue
+				}
+				return commitErr
+			}
+		}
 	}
 
 	if flagConsumeGroup != "" {
@@ -132,4 +146,12 @@ loop:
 	}
 
 	return nil
+}
+
+func isTransientCommitErr(err error) bool {
+	if errors.Is(err, client.ErrStaleGeneration) {
+		return true
+	}
+	st, ok := status.FromError(err)
+	return ok && st.Code() == codes.Unavailable
 }

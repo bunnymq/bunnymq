@@ -46,7 +46,7 @@ func makePartitionFactory(baseDir string) sm.CreateOnDiskStateMachineFunc {
 			panic(fmt.Sprintf("MkdirAll shard dir: %v", err))
 		}
 		sidecarPath := filepath.Join(dir, "applied.idx")
-		return partition.NewPartitionFSM(dir, sidecarPath, storageCfg)
+		return partition.NewPartitionFSM(dir, sidecarPath, storageCfg, nil, "", "")
 	}
 }
 

@@ -11,8 +11,10 @@ import (
 	iclient "github.com/bunnymq/bunnymq/internal/client"
 	pb "github.com/bunnymq/bunnymq/pkg/proto/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 // ConsumerConfig extends Config with consumer-specific settings.
@@ -31,11 +33,11 @@ type ConsumerConfig struct {
 // Safe for sequential use from a single goroutine; the heartbeat goroutine accesses shared
 // state under mu.
 type Consumer struct {
-	config      ConsumerConfig
-	pool        *iclient.ConnPool
-	meta        *iclient.MetaCache
-	decoder     *iclient.BatchDecoder
-	knownAddrs  []string
+	config        ConsumerConfig
+	pool          *iclient.ConnPool
+	meta          *iclient.MetaCache
+	decoder       *iclient.BatchDecoder
+	knownAddrs    []string
 	stopHeartbeat context.CancelFunc
 
 	// mu protects all fields below.
@@ -365,6 +367,12 @@ func (c *Consumer) Poll(ctx context.Context, maxWaitMs int64) ([]Record, error) 
 				c.meta.Invalidate(pw.tp.Topic)
 				continue
 			}
+			// Transient: broker went down (EOF, connection reset). Invalidate the
+			// leader so the next Poll re-resolves it via a fresh metadata fetch.
+			if st, ok := status.FromError(err); ok && st.Code() == codes.Unavailable {
+				c.meta.Invalidate(pw.tp.Topic)
+				continue
+			}
 			return nil, err
 		}
 		c.mu.Lock()
@@ -669,11 +677,47 @@ func (c *Consumer) heartbeatLoop(ctx context.Context) {
 // cleared before Poll resumes.
 func (c *Consumer) rebalance(ctx context.Context) {
 	c.mu.Lock()
+	saved := make(map[TP]int64, len(c.fetchOffsets))
+	for tp, off := range c.fetchOffsets {
+		saved[tp] = off
+	}
 	c.soughtPartitions = nil
 	c.fetchOffsets = make(map[TP]int64)
 	topics := append([]string(nil), c.subscribedTopics...)
 	c.mu.Unlock()
 
-	_ = c.joinGroup(ctx, topics)
+	if err := c.joinGroup(ctx, topics); err != nil {
+		c.rebalancing.Store(false)
+		return
+	}
+
+	// Commit the pre-rebalance read positions using the fresh generation so
+	// that initFetchOffsets can resume from them rather than the old committed
+	// offset. Only commit partitions that are still assigned to this member;
+	// ignore errors — if this fails the consumer falls back to the last
+	// durably committed offset (at-least-once re-delivery of one batch).
+	c.mu.Lock()
+	assigned := make(map[TP]struct{}, len(c.assignedPartitions))
+	for _, tp := range c.assignedPartitions {
+		assigned[tp] = struct{}{}
+	}
+	c.mu.Unlock()
+	toCommit := make(map[TP]int64)
+	for tp, off := range saved {
+		if _, ok := assigned[tp]; ok {
+			toCommit[tp] = off
+		}
+	}
+	if len(toCommit) > 0 {
+		if err := c.CommitOffsets(ctx, toCommit); err == nil {
+			// initFetchOffsets (inside joinGroup) already sought to the old
+			// committed offset. Now that we've committed further ahead, advance
+			// fetchOffsets to match so Poll doesn't re-read from the stale position.
+			for tp, off := range toCommit {
+				c.Seek(tp.Topic, tp.PartitionID, off)
+			}
+		}
+	}
+
 	c.rebalancing.Store(false)
 }
